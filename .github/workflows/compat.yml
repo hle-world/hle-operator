@@ -1,0 +1,29 @@
+name: Compatibility Check
+
+on:
+  repository_dispatch:
+    types: [hle-client-release]
+
+jobs:
+  test:
+    name: Test against hle-client ${{ github.event.client_payload.version }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install with latest hle-client
+        env:
+          CLIENT_VERSION: ${{ github.event.client_payload.version }}
+        run: |
+          pip install -e ".[dev]"
+          pip install "hle-client==${CLIENT_VERSION}"
+
+      - name: Lint
+        run: ruff check src/ tests/
+
+      - name: Test
+        run: pytest tests/ -v
