@@ -27,7 +27,7 @@ spec:
             - name: HLE_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.apiKey.secretName }}
+                  name: {{ .Values.apiKey.existingSecret | default (printf "%s-api-key" (include "hle-operator.fullname" .)) }}
                   key: {{ .Values.apiKey.secretKey }}
             - name: POD_NAMESPACE
               valueFrom:
