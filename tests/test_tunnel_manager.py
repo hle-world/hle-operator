@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,7 +14,6 @@ from hle_operator.tunnel_manager import (
     parse_crd_spec,
     parse_ingress_annotations,
 )
-
 
 # ---------------------------------------------------------------------------
 # parse_crd_spec
@@ -159,13 +157,7 @@ class TestParseIngressAnnotations:
 
     def test_no_service_name_returns_none(self):
         rules = [
-            {
-                "http": {
-                    "paths": [
-                        {"backend": {"service": {"name": "", "port": {"number": 80}}}}
-                    ]
-                }
-            }
+            {"http": {"paths": [{"backend": {"service": {"name": "", "port": {"number": 80}}}}]}}
         ]
         assert parse_ingress_annotations({}, rules) is None
 
@@ -191,7 +183,7 @@ class TestManagedTunnel:
 
         with (
             patch("hle_operator.tunnel_manager.Tunnel") as MockTunnel,
-            patch("hle_operator.tunnel_manager.TunnelConfig") as MockConfig,
+            patch("hle_operator.tunnel_manager.TunnelConfig"),
         ):
             mock_instance = MockTunnel.return_value
             mock_instance.connect = AsyncMock()
@@ -289,9 +281,7 @@ class TestManagedTunnel:
         with patch("hle_operator.tunnel_manager.ApiClient", return_value=mock_client):
             await tunnel.reconcile_access_control()
 
-        mock_client.add_access_rule.assert_called_once_with(
-            "grafana-x7k", "new@test.com", "github"
-        )
+        mock_client.add_access_rule.assert_called_once_with("grafana-x7k", "new@test.com", "github")
         mock_client.delete_access_rule.assert_called_once_with("grafana-x7k", 2)
 
     @pytest.mark.asyncio

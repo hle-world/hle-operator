@@ -21,7 +21,42 @@ dev = [
     "mypy",
     "pytest",
     "pytest-asyncio",
+    "pre-commit",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+    "ASYNC", # flake8-async
+    "S",     # flake8-bandit (security)
+]
+ignore = [
+    "S101",    # assert allowed in tests
+    "ASYNC109", # timeout parameter name is intentional
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "hle_operator.handlers"
+disable_error_code = ["arg-type", "no-any-return", "misc"]
