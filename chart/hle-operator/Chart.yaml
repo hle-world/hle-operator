@@ -1,0 +1,14 @@
+apiVersion: v2
+name: hle-operator
+description: Kubernetes operator for managing HLE tunnels via CRDs and Ingress resources
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - hle
+  - tunnel
+  - ingress
+  - homelab
+home: https://hle.world
+sources:
+  - https://github.com/hle-world/hle-operator
