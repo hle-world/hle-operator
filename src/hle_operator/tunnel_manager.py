@@ -85,6 +85,7 @@ class ManagedTunnel:
             websocket_enabled=self._spec.websocket_enabled,
             forward_host=self._spec.forward_host,
             verify_ssl=self._spec.verify_ssl,
+            managed_by="hle-operator" if self._spec.sync_policy == "strict" else None,
         )
 
         self._tunnel = Tunnel(
