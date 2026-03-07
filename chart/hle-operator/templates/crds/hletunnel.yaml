@@ -1,0 +1,162 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: hletunnels.hle.world
+  labels:
+    {{- include "hle-operator.labels" . | nindent 4 }}
+spec:
+  group: hle.world
+  names:
+    kind: HLETunnel
+    listKind: HLETunnelList
+    plural: hletunnels
+    singular: hletunnel
+    shortNames:
+      - hlt
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Public URL
+          type: string
+          jsonPath: .status.publicUrl
+        - name: Label
+          type: string
+          jsonPath: .spec.label
+        - name: Sync
+          type: string
+          jsonPath: .spec.syncPolicy
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - serviceRef
+                - label
+              properties:
+                serviceRef:
+                  type: object
+                  description: Reference to the Kubernetes Service to expose.
+                  required:
+                    - name
+                    - port
+                  properties:
+                    name:
+                      type: string
+                      description: Service name.
+                    namespace:
+                      type: string
+                      description: Service namespace. Defaults to the HLETunnel namespace.
+                    port:
+                      type: integer
+                      description: Service port number.
+                    protocol:
+                      type: string
+                      description: Protocol to use when connecting to the service.
+                      enum: ["http", "https"]
+                      default: "http"
+                label:
+                  type: string
+                  description: HLE tunnel label (used as subdomain prefix).
+                  pattern: "^[a-z0-9][a-z0-9-]*[a-z0-9]$"
+                  maxLength: 63
+                authMode:
+                  type: string
+                  description: Authentication mode for the tunnel endpoint.
+                  enum: ["sso", "none"]
+                  default: "sso"
+                websocketEnabled:
+                  type: boolean
+                  description: Enable WebSocket proxying.
+                  default: true
+                forwardHost:
+                  type: boolean
+                  description: Forward the browser Host header to the upstream service.
+                  default: false
+                verifySSL:
+                  type: boolean
+                  description: Verify SSL certificates when connecting to the upstream service.
+                  default: false
+                syncPolicy:
+                  type: string
+                  description: >
+                    How the operator manages this tunnel.
+                    "strict" continuously reconciles access control (dashboard edits are overwritten).
+                    "initial" applies settings only on creation (dashboard remains editable).
+                  enum: ["strict", "initial"]
+                  default: "strict"
+                accessControl:
+                  type: object
+                  description: Access control settings for the tunnel endpoint.
+                  properties:
+                    allowedUsers:
+                      type: array
+                      description: List of users allowed to access the tunnel via SSO.
+                      items:
+                        type: object
+                        required:
+                          - email
+                        properties:
+                          email:
+                            type: string
+                            description: Email address of the allowed user.
+                          provider:
+                            type: string
+                            description: SSO provider the user must authenticate with.
+                            enum: ["google", "github", "hle", "any"]
+                            default: "any"
+                    pin:
+                      type: string
+                      description: PIN code (4-8 digits) required to access the tunnel.
+                      pattern: "^[0-9]{4,8}$"
+                    basicAuth:
+                      type: object
+                      description: Basic Auth credentials for the tunnel endpoint.
+                      properties:
+                        secretRef:
+                          type: object
+                          description: >
+                            Reference to a Secret containing "username" and "password" keys.
+                          required:
+                            - name
+                          properties:
+                            name:
+                              type: string
+                              description: Name of the Secret.
+                apiKeyRef:
+                  type: object
+                  description: >
+                    Override the global API key with a per-tunnel key from a Secret.
+                    If not set, the operator's global API key is used.
+                  properties:
+                    name:
+                      type: string
+                      description: Name of the Secret containing the API key.
+                    key:
+                      type: string
+                      description: Key within the Secret.
+                      default: "api-key"
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: ["Pending", "Connected", "Disconnected", "Failed"]
+                publicUrl:
+                  type: string
+                subdomain:
+                  type: string
+                message:
+                  type: string

@@ -1,0 +1,32 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/hle-world/hle-operator
+  tag: ""  # Defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# HLE API key Secret reference.
+# The operator reads the API key from this Secret and injects it as HLE_API_KEY env var.
+apiKey:
+  secretName: hle-api-key
+  secretKey: api-key
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
