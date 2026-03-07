@@ -9,11 +9,16 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-# HLE API key Secret reference.
-# The operator reads the API key from this Secret and injects it as HLE_API_KEY env var.
+# HLE API key configuration.
+# Option 1: Provide the key directly (chart creates the Secret):
+#   helm install hle-operator ./chart/hle-operator --set apiKey.value=hle_your_key_here
+# Option 2: Reference an existing Secret:
+#   kubectl create secret generic hle-api-key --from-literal=api-key=hle_...
+#   helm install hle-operator ./chart/hle-operator --set apiKey.existingSecret=hle-api-key
 apiKey:
-  secretName: hle-api-key
-  secretKey: api-key
+  value: ""              # API key value — chart creates a Secret if set
+  existingSecret: ""     # Name of an existing Secret (takes precedence over value)
+  secretKey: api-key     # Key within the Secret
 
 serviceAccount:
   create: true
