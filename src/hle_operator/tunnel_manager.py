@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlparse
 
 from hle_client.api import ApiClient, ApiClientConfig
 from hle_client.tunnel import Tunnel, TunnelConfig, TunnelFatalError
@@ -101,10 +101,8 @@ class ManagedTunnel:
             await self._tunnel.disconnect()
         if self._task and not self._task.done():
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
         self._tunnel = None
         self._task = None
         self._subdomain = None
@@ -115,7 +113,7 @@ class ManagedTunnel:
         try:
             await asyncio.wait_for(self._connected.wait(), timeout=timeout)
             return True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
 
     async def reconcile_access_control(self) -> None:
@@ -159,17 +157,13 @@ class ManagedTunnel:
             return
 
         try:
-            current_rules: list[dict[str, Any]] = await client.list_access_rules(
-                self._subdomain
-            )
+            current_rules: list[dict[str, Any]] = await client.list_access_rules(self._subdomain)
         except Exception:
             self._logger.exception("Failed to list access rules")
             return
 
         # Build desired state
-        desired = {
-            (u.email, u.provider) for u in self._spec.access_control.allowed_users
-        }
+        desired = {(u.email, u.provider) for u in self._spec.access_control.allowed_users}
 
         # Build current state
         current = {
@@ -244,17 +238,13 @@ class ManagedTunnel:
 
         if desired_ba and not has_ba:
             try:
-                await client.set_tunnel_basic_auth(
-                    self._subdomain, desired_ba[0], desired_ba[1]
-                )
+                await client.set_tunnel_basic_auth(self._subdomain, desired_ba[0], desired_ba[1])
                 self._logger.info("Basic auth set on tunnel")
             except Exception:
                 self._logger.exception("Failed to set basic auth")
         elif desired_ba and has_ba:
             try:
-                await client.set_tunnel_basic_auth(
-                    self._subdomain, desired_ba[0], desired_ba[1]
-                )
+                await client.set_tunnel_basic_auth(self._subdomain, desired_ba[0], desired_ba[1])
             except Exception:
                 self._logger.exception("Failed to update basic auth")
         elif not desired_ba and has_ba:
@@ -281,9 +271,8 @@ def parse_crd_spec(spec: dict[str, Any]) -> ManagedTunnelSpec:
         for u in ac_spec.get("allowedUsers", [])
     ]
 
-    ba_secret_ref = ac_spec.get("basicAuth", {}).get("secretRef")
-    # Basic auth is loaded separately via Kubernetes API — store None here,
-    # handlers will resolve the Secret and set it.
+    # Basic auth is loaded separately via Kubernetes API —
+    # handlers will resolve the Secret and set it on the spec.
 
     return ManagedTunnelSpec(
         service_url=service_url,
@@ -317,7 +306,6 @@ def parse_ingress_annotations(
     backend = paths[0].get("backend", {})
     service = backend.get("service", {})
     svc_name = service.get("name", "")
-    svc_port = service.get("port", {}).get("number", 80)
 
     if not svc_name:
         return None
