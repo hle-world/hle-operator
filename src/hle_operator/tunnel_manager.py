@@ -167,9 +167,9 @@ class ManagedTunnel:
 
         # Build current state
         current = {
-            (r["email"], r["provider"]): r["id"]
+            (r["allowed_email"], r["provider"]): r["id"]
             for r in current_rules
-            if "email" in r and "provider" in r
+            if "allowed_email" in r and "provider" in r
         }
 
         # Add missing rules
