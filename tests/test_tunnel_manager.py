@@ -274,8 +274,8 @@ class TestManagedTunnel:
 
         mock_client = AsyncMock()
         mock_client.list_access_rules.return_value = [
-            {"email": "keep@test.com", "provider": "google", "id": 1},
-            {"email": "old@test.com", "provider": "any", "id": 2},
+            {"allowed_email": "keep@test.com", "provider": "google", "id": 1},
+            {"allowed_email": "old@test.com", "provider": "any", "id": 2},
         ]
 
         with patch("hle_operator.tunnel_manager.ApiClient", return_value=mock_client):
