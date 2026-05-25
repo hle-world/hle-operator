@@ -12,7 +12,6 @@ import kubernetes.client
 from hle_operator.config import get_api_key, load_api_key, load_config
 from hle_operator.tunnel_manager import (
     ManagedTunnel,
-    ManagedTunnelSpec,
     parse_crd_spec,
     parse_ingress_annotations,
 )
@@ -34,12 +33,8 @@ _ingress_tunnels: dict[str, ManagedTunnel] = {}
 @kopf.on.startup()
 async def startup(settings: kopf.OperatorSettings, **kwargs) -> None:  # type: ignore[no-untyped-def]
     settings.persistence.finalizer = "hle.world/operator-finalizer"
-    settings.persistence.progress_storage = kopf.AnnotationsProgressStorage(
-        prefix="hle.world"
-    )
-    settings.persistence.diffbase_storage = kopf.AnnotationsDiffBaseStorage(
-        prefix="hle.world"
-    )
+    settings.persistence.progress_storage = kopf.AnnotationsProgressStorage(prefix="hle.world")
+    settings.persistence.diffbase_storage = kopf.AnnotationsDiffBaseStorage(prefix="hle.world")
 
     load_config()
     load_api_key()
@@ -91,16 +86,15 @@ async def on_tunnel_create(
     # Resolve basicAuth Secret if specified
     ba_secret = (spec.get("accessControl") or {}).get("basicAuth", {}).get("secretRef")
     if ba_secret:
-        managed_spec.access_control.basic_auth = _read_basic_auth_secret(
-            ba_secret["name"], ns
-        )
+        managed_spec.access_control.basic_auth = _read_basic_auth_secret(ba_secret["name"], ns)
 
     # Per-tunnel API key override
     api_key_ref = spec.get("apiKeyRef")
     if api_key_ref:
-        api_key = _read_secret_key(
-            api_key_ref["name"], ns, api_key_ref.get("key", "api-key")
-        ) or get_api_key()
+        api_key = (
+            _read_secret_key(api_key_ref["name"], ns, api_key_ref.get("key", "api-key"))
+            or get_api_key()
+        )
     else:
         api_key = get_api_key()
 
@@ -159,13 +153,9 @@ async def on_tunnel_update(
     if not tunnel_config_changed and existing and existing.is_connected:
         # Only access control changed — reconcile without restarting tunnel
         managed_spec = parse_crd_spec(dict(spec))
-        ba_secret = (
-            (spec.get("accessControl") or {}).get("basicAuth", {}).get("secretRef")
-        )
+        ba_secret = (spec.get("accessControl") or {}).get("basicAuth", {}).get("secretRef")
         if ba_secret:
-            managed_spec.access_control.basic_auth = _read_basic_auth_secret(
-                ba_secret["name"], ns
-            )
+            managed_spec.access_control.basic_auth = _read_basic_auth_secret(ba_secret["name"], ns)
         existing._spec = managed_spec
         await existing.reconcile_access_control()
         patch.status["message"] = "Access control updated"
@@ -283,9 +273,7 @@ async def on_ingress_create(
     # Resolve basicAuth Secret if specified
     ba_secret_name = annotations.get("hle.world/basic-auth-secret")
     if ba_secret_name:
-        managed_spec.access_control.basic_auth = _read_basic_auth_secret(
-            ba_secret_name, ns
-        )
+        managed_spec.access_control.basic_auth = _read_basic_auth_secret(ba_secret_name, ns)
 
     # Stop existing if resuming
     existing = _ingress_tunnels.pop(key, None)
@@ -303,9 +291,7 @@ async def on_ingress_create(
 
     connected = await tunnel.wait_connected(timeout=30.0)
     if connected:
-        logger.info(
-            "Ingress tunnel connected: %s -> %s", name, tunnel.public_url
-        )
+        logger.info("Ingress tunnel connected: %s -> %s", name, tunnel.public_url)
         return {"phase": "Connected", "publicUrl": tunnel.public_url or ""}
 
     return {"phase": "Pending"}
@@ -365,9 +351,7 @@ async def on_ingress_delete(
 # ---------------------------------------------------------------------------
 
 
-def _read_basic_auth_secret(
-    secret_name: str, namespace: str
-) -> tuple[str, str] | None:
+def _read_basic_auth_secret(secret_name: str, namespace: str) -> tuple[str, str] | None:
     """Read username/password from a Kubernetes Secret."""
     try:
         v1 = kubernetes.client.CoreV1Api()
@@ -383,9 +367,7 @@ def _read_basic_auth_secret(
     return None
 
 
-def _read_secret_key(
-    secret_name: str, namespace: str, key: str
-) -> str | None:
+def _read_secret_key(secret_name: str, namespace: str, key: str) -> str | None:
     """Read a single key from a Kubernetes Secret."""
     try:
         v1 = kubernetes.client.CoreV1Api()
