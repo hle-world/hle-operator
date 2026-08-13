@@ -1,0 +1,16 @@
+{{/*
+The agent's enrollment token, when the chart is asked to hold it. Named for
+what it is rather than for its Kind, because "secret.yaml" is already taken by
+the operator's API key.
+*/}}
+{{- if and .Values.agent.enabled .Values.agent.token.value (not .Values.agent.token.existingSecret) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "hle-operator.agentFullname" . }}-token
+  labels:
+    {{- include "hle-operator.agentLabels" . | nindent 4 }}
+type: Opaque
+stringData:
+  {{ .Values.agent.token.secretKey }}: {{ .Values.agent.token.value | quote }}
+{{- end }}
