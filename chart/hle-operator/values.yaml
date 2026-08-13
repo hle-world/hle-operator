@@ -1,3 +1,8 @@
+# The operator: HLETunnel CRDs and Ingress adoption, the declarative path.
+# Set to false to install the agent alone.
+operator:
+  enabled: true
+
 replicaCount: 1
 
 image:
@@ -35,3 +40,68 @@ resources:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# ---------------------------------------------------------------------------
+# The agent: one process holding every tunnel you declare in the dashboard.
+#
+# The imperative counterpart to the operator. Endpoints are added and removed
+# at https://hle.world/dashboard and the agent converges within seconds — no
+# CRDs, no redeploy. The two are independent and can run side by side; enable
+# whichever path you want.
+#
+#   helm install hle ./chart/hle-operator \
+#     --set operator.enabled=false \
+#     --set agent.enabled=true \
+#     --set agent.token.value=hlea_your_token_here
+#
+# Get the token from Dashboard -> Agents -> New Agent. It is shown once.
+# ---------------------------------------------------------------------------
+agent:
+  enabled: false
+
+  image:
+    # The headless distribution image: the CLI with no local web UI. Running it
+    # with an agent token starts `hle agent run` in the foreground.
+    repository: ghcr.io/hle-world/hle-docker
+    tag: headless
+    pullPolicy: IfNotPresent
+
+  # Agent enrollment token (hlea_…). Same two options as apiKey above.
+  token:
+    value: ""              # chart creates a Secret if set
+    existingSecret: ""     # name of an existing Secret (takes precedence)
+    secretKey: agent-token
+
+  discovery:
+    # Grants the agent a read-only, cluster-wide view of Services and
+    # Endpoints, so the dashboard can list what is running and turn any of it
+    # into a tunnel in one click. The agent never writes to the cluster.
+    #
+    # With this off, the agent still works — you type service URLs yourself.
+    enabled: true
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+  # The agent dials out and holds no inbound listener, so it needs no Service,
+  # no Ingress, and no published port. There is deliberately no replicaCount:
+  # an enrollment identifies one machine, and a second replica on the same
+  # token would be a second claimant on the same endpoints.
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+  # Extra environment for the agent container, e.g. HLE_SERVER_URL when you run
+  # your own relay.
+  env: []
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

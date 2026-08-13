@@ -2,6 +2,48 @@
 
 Kubernetes operator for [HLE (Home Lab Everywhere)](https://hle.world) tunnels. Expose your cluster services to the internet through HLE's relay network with declarative Kubernetes resources.
 
+## Two ways to run HLE in a cluster
+
+This chart ships both, and they are independent — install either, or both.
+
+| | **Operator** | **Agent** |
+|---|---|---|
+| You declare tunnels in | `HLETunnel` CRDs and Ingress resources | the [dashboard](https://hle.world/dashboard) |
+| Fits | GitOps, Flux, Argo — the cluster is the source of truth | clicking, trying things, homelabs |
+| Finds services for you | no — you name them | yes, [discovery](https://hle.world/docs/discovery/) lists every Service |
+| Enable with | `operator.enabled=true` (default) | `agent.enabled=true` |
+
+```bash
+# The agent, with cluster-wide read-only discovery
+helm install hle ./chart/hle-operator \
+  --set operator.enabled=false \
+  --set agent.enabled=true \
+  --set agent.token.value=hlea_your_token_here
+```
+
+Get the token from **Dashboard → Agents → New Agent** — it is shown once. The
+pod dials out; nothing is published, and no Service or Ingress is created.
+
+Prefer to hold the token yourself:
+
+```bash
+kubectl create secret generic hle-agent --from-literal=agent-token=hlea_...
+helm install hle ./chart/hle-operator \
+  --set agent.enabled=true --set agent.token.existingSecret=hle-agent
+```
+
+### What discovery can see
+
+`agent.discovery.enabled=true` (the default) binds a ClusterRole granting
+`get`, `list` and `watch` on **services** and **endpoints**, cluster-wide. That
+is the entire grant. The agent never creates, patches or deletes anything, and
+`kube-system`, `kube-public` and `kube-node-lease` are skipped before the list
+is reported.
+
+Turn it off with `--set agent.discovery.enabled=false` and the agent stops
+mounting a ServiceAccount token altogether — you then type service URLs into
+the dashboard yourself.
+
 ## Features
 
 - **HLETunnel CRD** — Declarative tunnel management with full access control
