@@ -20,7 +20,36 @@ jobs:
           CLIENT_VERSION: ${{ github.event.client_payload.version }}
         run: |
           pip install -e ".[dev]"
-          pip install "hle-client==${CLIENT_VERSION}"
+
+          # The payload carries the git tag, which is "v2609.4"; a version
+          # specifier wants "2609.4".
+          version="${CLIENT_VERSION#v}"
+
+          # repository_dispatch payloads are attacker-controllable input, and
+          # this one becomes a pip install argument. Only a CalVer version may
+          # pass; anything else could name a package or an index instead.
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]{4}\.[0-9]+(\.[0-9]+)?$'; then
+            echo "::error::Refusing to install from an unexpected version payload."
+            exit 1
+          fi
+
+          # This dispatch can arrive before the release is installable. PyPI
+          # serves the index from a CDN whose edges lag the upload by minutes,
+          # and pip resolves through whichever edge it reaches — v2609.4 failed
+          # here with "from versions: ..., 2609.3" while the publish job was
+          # still finishing. That is propagation, not incompatibility, and
+          # reporting it as a failed compatibility check hides the one thing
+          # this job exists to tell us.
+          for attempt in $(seq 1 10); do
+            if pip install "hle-client==${version}"; then
+              exit 0
+            fi
+            echo "hle-client ${version} not on PyPI yet (attempt ${attempt}/10); waiting 60s"
+            sleep 60
+          done
+
+          echo "::error::hle-client ${version} was still not installable after 10 minutes."
+          exit 1
 
       - name: Lint
         run: ruff check src/ tests/
