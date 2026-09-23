@@ -32,6 +32,16 @@ helm install hle ./chart/hle-operator \
   --set agent.enabled=true --set agent.token.existingSecret=hle-agent
 ```
 
+The agent image defaults to the floating `headless` tag with
+`pullPolicy: Always`, so every pod restart pulls the current build. For
+reproducible rollouts pin a release tag instead:
+
+```bash
+helm install hle ./chart/hle-operator \
+  --set agent.enabled=true --set agent.token.existingSecret=hle-agent \
+  --set agent.image.tag=2609.6-headless
+```
+
 ### What discovery can see
 
 `agent.discovery.enabled=true` (the default) binds a ClusterRole granting
