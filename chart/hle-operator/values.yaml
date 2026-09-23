@@ -63,8 +63,12 @@ agent:
     # The headless distribution image: the CLI with no local web UI. Running it
     # with an agent token starts `hle agent run` in the foreground.
     repository: ghcr.io/hle-world/hle-docker
+    # `headless` is a floating tag, so pullPolicy is Always: a pod restart picks
+    # up the current build instead of reusing whatever the node cached. Pin a
+    # per-version tag (e.g. tag: "2609.6-headless") for reproducible rollouts; with a
+    # pinned tag IfNotPresent is fine.
     tag: headless
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
 
   # Agent enrollment token (hlea_…). Same two options as apiKey above.
   token:

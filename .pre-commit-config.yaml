@@ -24,6 +24,6 @@ repos:
         additional_dependencies:
           - kopf>=1.37
           - kubernetes>=28.0
-          - hle-client>=1.15.0
+          - hle-client>=2609.5
         args: [--ignore-missing-imports]
         exclude: ^tests/
