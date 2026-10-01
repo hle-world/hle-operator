@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from enum import StrEnum
 
 import kubernetes.client
 import kubernetes.config
@@ -12,6 +15,119 @@ logger = logging.getLogger(__name__)
 
 # Global API key loaded at startup from the hle-api-key Secret.
 _api_key: str = ""
+
+# -- mode and agent-mode settings -------------------------------------------
+# Agent mode is the default (hle-world/hle-operator #6): one pod, one
+# enrollment, the CRD/Ingress reconciler layered on top. Legacy mode keeps the
+# full-account apiKey operator exactly as it was.
+MODE_ENV = "HLE_OPERATOR_MODE"
+AGENT_TOKEN_ENV = "HLE_AGENT_TOKEN"  # noqa: S105 — an env var name, not a secret
+CREDENTIAL_ENV = "HLE_CREDENTIAL"
+LEGACY_API_KEY_ENV = "HLE_API_KEY"
+GITOPS_ENV = "HLE_GITOPS"
+RELAY_HOST_ENV = "HLE_RELAY_HOST"
+RELAY_PORT_ENV = "HLE_RELAY_PORT"
+NAMESPACES_ENV = "HLE_NAMESPACES"
+DEFAULT_RELAY_HOST = "hle.world"
+DEFAULT_RELAY_PORT = 443
+
+
+class OperatorMode(StrEnum):
+    AGENT = "agent"
+    LEGACY = "legacy"
+
+
+@dataclass
+class OperatorConfig:
+    """Resolved runtime configuration for one process."""
+
+    mode: OperatorMode
+    # Agent mode: the tunnel-scoped ``hle_`` key (or a legacy ``hlea_`` token).
+    # Legacy mode: the full-account API key.
+    credential: str = ""
+    # Whether to run the CRD/Ingress reconciler and declare its endpoints.
+    # Legacy mode always does; in agent mode it is opt-in and off by default.
+    gitops: bool = False
+    relay_host: str = DEFAULT_RELAY_HOST
+    relay_port: int = DEFAULT_RELAY_PORT
+    # Empty means cluster-wide. kopf takes either this or clusterwide=True.
+    namespaces: list[str] = field(default_factory=list)
+
+
+def _env_bool(value: str | None, *, default: bool) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def resolve_mode(env: Mapping[str, str] | None = None) -> OperatorMode:
+    """Pick agent or legacy mode.
+
+    ``HLE_OPERATOR_MODE`` wins when set. Otherwise auto-detect: an older
+    install that has only ``HLE_API_KEY`` keeps working as legacy, because a
+    full-account key cannot be turned into an agent enrollment in place. Any
+    agent credential present means agent mode, the default.
+    """
+    env = os.environ if env is None else env
+    explicit = (env.get(MODE_ENV) or "").strip().lower()
+    if explicit == OperatorMode.AGENT:
+        return OperatorMode.AGENT
+    if explicit == OperatorMode.LEGACY:
+        return OperatorMode.LEGACY
+    if explicit:
+        logger.warning("Ignoring %s=%r; expected 'agent' or 'legacy'", MODE_ENV, explicit)
+
+    has_agent_cred = bool(env.get(AGENT_TOKEN_ENV) or env.get(CREDENTIAL_ENV))
+    has_api_key = bool(env.get(LEGACY_API_KEY_ENV))
+    if has_api_key and not has_agent_cred:
+        return OperatorMode.LEGACY
+    return OperatorMode.AGENT
+
+
+def load_operator_config(env: Mapping[str, str] | None = None) -> OperatorConfig:
+    """Read mode, credential, gitops, relay and namespace scope from the env."""
+    env = os.environ if env is None else env
+    mode = resolve_mode(env)
+
+    if mode is OperatorMode.AGENT:
+        credential = env.get(AGENT_TOKEN_ENV) or env.get(CREDENTIAL_ENV) or ""
+        gitops = _env_bool(env.get(GITOPS_ENV), default=False)
+        if not credential:
+            logger.error(
+                "Agent mode has no credential — set %s (or %s) to the tunnel-scoped key",
+                AGENT_TOKEN_ENV,
+                CREDENTIAL_ENV,
+            )
+        if env.get(LEGACY_API_KEY_ENV):
+            logger.warning(
+                "Agent mode is using a full-account %s; prefer a tunnel-scoped credential",
+                LEGACY_API_KEY_ENV,
+            )
+    else:
+        credential = env.get(LEGACY_API_KEY_ENV) or ""
+        gitops = True
+        logger.warning(
+            "Running in legacy operator mode (%s=legacy); the full-account %s path is "
+            "deprecated in favour of the agent default",
+            MODE_ENV,
+            LEGACY_API_KEY_ENV,
+        )
+
+    namespaces = [n.strip() for n in (env.get(NAMESPACES_ENV) or "").split(",") if n.strip()]
+    try:
+        relay_port = int(env.get(RELAY_PORT_ENV) or DEFAULT_RELAY_PORT)
+    except ValueError:
+        logger.warning("Ignoring invalid %s; using %d", RELAY_PORT_ENV, DEFAULT_RELAY_PORT)
+        relay_port = DEFAULT_RELAY_PORT
+
+    return OperatorConfig(
+        mode=mode,
+        credential=credential,
+        gitops=gitops,
+        relay_host=env.get(RELAY_HOST_ENV) or DEFAULT_RELAY_HOST,
+        relay_port=relay_port,
+        namespaces=namespaces,
+    )
 
 
 def load_config() -> None:
