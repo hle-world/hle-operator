@@ -1,4 +1,4 @@
-{{- if .Values.agent.enabled -}}
+{{- if and (eq (include "hle-operator.mode" .) "legacy") .Values.agent.enabled -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,8 +39,9 @@ spec:
             - name: HLE_AGENT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.agent.token.existingSecret | default (printf "%s-token" (include "hle-operator.agentFullname" .)) }}
-                  key: {{ .Values.agent.token.secretKey }}
+                  {{- $cred := include "hle-operator.credentialSpec" (dict "ctx" . "for" "agent") | fromJson }}
+                  name: {{ $cred.name }}
+                  key: {{ $cred.key }}
             # Tells the relay this agent runs in Kubernetes, so the dashboard
             # can label it. hle-client does not read it yet; it is set now so
             # the value is in place when it does.

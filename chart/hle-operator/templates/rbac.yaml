@@ -1,4 +1,4 @@
-{{- if .Values.operator.enabled -}}
+{{- if and .Values.operator.enabled (eq (include "hle-operator.mode" .) "legacy") -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
