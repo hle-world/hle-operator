@@ -41,10 +41,27 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.agent.token.existingSecret | default (printf "%s-token" (include "hle-operator.agentFullname" .)) }}
                   key: {{ .Values.agent.token.secretKey }}
+            # Tells the relay this agent runs in Kubernetes, so the dashboard
+            # can label it. hle-client does not read it yet; it is set now so
+            # the value is in place when it does.
+            - name: HLE_INSTALL_METHOD
+              value: kubernetes
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            # See agent.firepuncher in values.yaml: off by default. hle-client
+            # does not read this yet.
+            - name: HLE_FIREPUNCHER_ENABLED
+              value: {{ .Values.agent.firepuncher.enabled | quote }}
+            {{- if .Values.agent.discovery.enabled }}
+            # Namespace opt-out, cluster-wide read. hle-client does not read
+            # these yet; the client-side filter lands in hle-client.
+            - name: HLE_DISCOVERY_EXCLUDE_NAMESPACES
+              value: {{ join "," .Values.agent.discovery.excludeNamespaces | quote }}
+            - name: HLE_DISCOVERY_EXCLUDE_LABEL
+              value: {{ .Values.agent.discovery.excludeLabel | quote }}
+            {{- end }}
             {{- with .Values.agent.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -53,6 +70,23 @@ spec:
             # reconnect, not a re-enrollment, so it does not need a PVC.
             - name: data
               mountPath: /data
+          # Only pass readiness once the agent has a usable enrollment
+          # credential: `hle agent status` exits non-zero when none is
+          # configured, so a missing token keeps the pod out of Service
+          # endpoints instead of idling there as if healthy.
+          #
+          # Gap: this does not prove the relay accepted us. The agent keeps no
+          # local connection state and hle-client exposes no welcome-aware
+          # signal, so "ready only after welcome" needs an hle-client change
+          # (a status file or health endpoint). Until then this is the closest
+          # existing mechanism.
+          readinessProbe:
+            exec:
+              command: ["hle", "agent", "status"]
+            initialDelaySeconds: 5
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.agent.resources | nindent 12 }}
           securityContext:

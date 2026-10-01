@@ -84,6 +84,31 @@ agent:
     # With this off, the agent still works — you type service URLs yourself.
     enabled: true
 
+    # Scope is cluster-wide but opt-out: these namespaces are never reported.
+    # The system namespaces are infrastructure, and in kube-system's case
+    # actively dangerous to put on the internet.
+    excludeNamespaces:
+      - kube-system
+      - kube-public
+      - kube-node-lease
+
+    # Any namespace labelled with this selector is skipped too, so a cluster
+    # admin can opt a namespace out without editing this Helm release, e.g.
+    #   kubectl label namespace secrets hle.world/expose=denied
+    excludeLabel: "hle.world/expose=denied"
+
+  # Firepuncher (`hle fp --agent`) turns the agent into a dialer for other
+  # machines' services on demand. It is off by default for cluster agents: a
+  # cluster agent advertises the tunnels declared in the dashboard, and should
+  # not double as a jump host into the cluster network. Opt in if you want it.
+  #
+  # NOTE: hle-client does not read HLE_FIREPUNCHER_ENABLED yet. The env var is
+  # wired up here so the value is already in place; honouring it lands in
+  # hle-client. Until then the agent still advertises the firepuncher
+  # capability and this toggle has no effect.
+  firepuncher:
+    enabled: false
+
   serviceAccount:
     create: true
     name: ""

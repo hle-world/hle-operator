@@ -30,6 +30,11 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.apiKey.existingSecret | default (printf "%s-api-key" (include "hle-operator.fullname" .)) }}
                   key: {{ .Values.apiKey.secretKey }}
+            # Tells the relay this operator runs in Kubernetes. hle-client
+            # does not read it yet; it is set now so the value is in place
+            # when it does.
+            - name: HLE_INSTALL_METHOD
+              value: kubernetes
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
