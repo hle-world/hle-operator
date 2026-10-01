@@ -15,7 +15,7 @@ This chart ships both, and they are independent — install either, or both.
 
 ```bash
 # The agent, with cluster-wide read-only discovery
-helm install hle ./chart/hle-operator \
+helm upgrade --install hle oci://ghcr.io/hle-world/charts/hle-operator \
   --set operator.enabled=false \
   --set agent.enabled=true \
   --set agent.token.value=hlea_your_token_here
@@ -28,7 +28,7 @@ Prefer to hold the token yourself:
 
 ```bash
 kubectl create secret generic hle-agent --from-literal=agent-token=hlea_...
-helm install hle ./chart/hle-operator \
+helm upgrade --install hle oci://ghcr.io/hle-world/charts/hle-operator \
   --set agent.enabled=true --set agent.token.existingSecret=hle-agent
 ```
 
@@ -37,7 +37,7 @@ The agent image defaults to the floating `headless` tag with
 reproducible rollouts pin a release tag instead:
 
 ```bash
-helm install hle ./chart/hle-operator \
+helm upgrade --install hle oci://ghcr.io/hle-world/charts/hle-operator \
   --set agent.enabled=true --set agent.token.existingSecret=hle-agent \
   --set agent.image.tag=2609.6-headless
 ```
@@ -67,13 +67,40 @@ the dashboard yourself.
 
 ### 1. Install the operator
 
+The chart is published as an OCI artifact to GitHub Container Registry on every
+release. Installing without `--version` always pulls the newest chart, whose
+default image tag tracks that same release:
+
 ```bash
 # Create the API key Secret
 kubectl create secret generic hle-api-key \
   --from-literal=api-key=hle_your_key_here
 
-# Install via Helm
-helm install hle-operator ./chart/hle-operator
+# Install from the published OCI chart (newest release)
+helm upgrade --install hle-operator \
+  oci://ghcr.io/hle-world/charts/hle-operator
+```
+
+Releases are CalVer (`v2609.4`). The chart version and `appVersion` match the
+release, the default `image.tag` is empty so it resolves to `Chart.appVersion`,
+and `image.pullPolicy` is `IfNotPresent` — release image tags are immutable, so
+a restart reuses the cached image instead of re-pulling. Pin a specific chart
+with:
+
+```bash
+helm upgrade --install hle-operator \
+  oci://ghcr.io/hle-world/charts/hle-operator --version 2609.4
+```
+
+The image is also published with a floating `latest` tag on each release; the
+chart does not use it, so upgrades are driven by the chart version instead.
+
+#### From source (contributors)
+
+```bash
+git clone https://github.com/hle-world/hle-operator
+cd hle-operator
+helm upgrade --install hle-operator ./chart/hle-operator
 ```
 
 ### 2. Expose a service

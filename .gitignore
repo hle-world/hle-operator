@@ -8,3 +8,5 @@ build/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+# Local Claude Code state (hook logs, settings)
+.claude/
