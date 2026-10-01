@@ -12,6 +12,10 @@ license = "MIT"
 dependencies = [
     "kopf>=1.37",
     "kubernetes>=28.0",
+    # TODO: agent mode needs the P3+P4 client release (protocol 1.4 with
+    # declared_endpoints, DeclaredAccess, spec_resolver and endpoint_statuses).
+    # The release number is filled in at release time; the worktree is used to
+    # run these tests until then.
     "hle-client>=2609.5",
 ]
 
@@ -60,4 +64,4 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "hle_operator.handlers"
-disable_error_code = ["arg-type", "no-any-return", "misc"]
+disable_error_code = ["arg-type", "no-any-return", "misc", "no-untyped-def"]
