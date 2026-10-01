@@ -1,0 +1,28 @@
+{{/*
+The HLE key Secret(s), when the chart is asked to hold a value inline.
+`credential.*` is preferred; the deprecated `agent.token.*` and `apiKey.*` map
+onto it and keep their old Secret names, so Helm does not delete and recreate a
+Secret across an upgrade. A forced legacy install that also runs the separate
+agent holds two (the full-account key and the agent token).
+*/}}
+{{- $kinds := list "operator" -}}
+{{- if and (eq (include "hle-operator.mode" .) "legacy") .Values.agent.enabled -}}
+{{- $kinds = append $kinds "agent" -}}
+{{- end -}}
+{{- $seen := list -}}
+{{- range $kinds -}}
+{{- $s := include "hle-operator.credentialSpec" (dict "ctx" $ "for" .) | fromJson -}}
+{{- if and $s.inline (not (has $s.name $seen)) }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $s.name }}
+  labels:
+    {{- include "hle-operator.labels" $ | nindent 4 }}
+type: Opaque
+stringData:
+  {{ $s.key }}: {{ $s.inline | quote }}
+{{- $seen = append $seen $s.name -}}
+{{- end }}
+{{- end }}
