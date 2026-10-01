@@ -22,6 +22,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pre-commit",
+    "pyyaml",
 ]
 
 [tool.pytest.ini_options]

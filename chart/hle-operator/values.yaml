@@ -16,10 +16,10 @@ fullnameOverride: ""
 
 # HLE API key configuration.
 # Option 1: Provide the key directly (chart creates the Secret):
-#   helm install hle-operator ./chart/hle-operator --set apiKey.value=hle_your_key_here
+#   helm upgrade --install hle-operator oci://ghcr.io/hle-world/charts/hle-operator --set apiKey.value=hle_your_key_here
 # Option 2: Reference an existing Secret:
 #   kubectl create secret generic hle-api-key --from-literal=api-key=hle_...
-#   helm install hle-operator ./chart/hle-operator --set apiKey.existingSecret=hle-api-key
+#   helm upgrade --install hle-operator oci://ghcr.io/hle-world/charts/hle-operator --set apiKey.existingSecret=hle-api-key
 apiKey:
   value: ""              # API key value — chart creates a Secret if set
   existingSecret: ""     # Name of an existing Secret (takes precedence over value)
@@ -49,7 +49,7 @@ affinity: {}
 # CRDs, no redeploy. The two are independent and can run side by side; enable
 # whichever path you want.
 #
-#   helm install hle ./chart/hle-operator \
+#   helm upgrade --install hle oci://ghcr.io/hle-world/charts/hle-operator \
 #     --set operator.enabled=false \
 #     --set agent.enabled=true \
 #     --set agent.token.value=hlea_your_token_here
