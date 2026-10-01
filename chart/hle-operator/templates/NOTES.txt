@@ -1,0 +1,65 @@
+HLE operator is installed in {{ include "hle-operator.mode" . }} mode.
+
+{{- if eq (include "hle-operator.mode" .) "agent" }}
+
+This release runs the cluster agent{{ if (include "hle-operator.gitops" .) }} and the
+CRD/Ingress GitOps reconciler{{ end }} from one Deployment. It appears in the
+hle.world dashboard under Agents, and you can expose Services, change access
+rules and read status from the dashboard or the `hle` CLI. Nothing is written
+to the cluster.
+
+{{- if (include "hle-operator.gitops" .) }}
+GitOps is ON: HLETunnel CRs and `ingressClassName: hle` Ingresses are declared
+to the dashboard and shown read-only. Set `gitops.enabled=false` for a pure
+dashboard/CLI agent.
+{{- else }}
+GitOps is OFF: only dashboard/CLI-created endpoints are managed. Set
+`gitops.enabled=true` to adopt HLETunnel CRs and `hle` Ingresses.
+{{- end }}
+
+{{- if .Values.handover.enabled }}
+Rollouts use RollingUpdate (maxSurge=1, maxUnavailable=0): a `helm upgrade`
+should not drop traffic. This needs the relay and hle-client to honour
+HLE_HANDOVER_GROUP. If the upgrade stalls with two pods, set
+`handover.enabled=false` and roll back.
+{{- else }}
+Rollouts use Recreate until the relay's P6 handover admission is live, so a
+`helm upgrade` drops each tunnel for a few seconds. Once P6 is deployed on the
+relay, set `handover.enabled=true` for a zero-drop RollingUpdate.
+{{- end }}
+
+Migrating from the legacy operator:
+  1. Enroll the cluster (Dashboard -> Agents -> New Agent) and copy the
+     tunnel-scoped `hle_` key.
+  2. helm upgrade ... --set credential.value=hle_...
+     Auto-detect flips the release to agent mode; `Recreate` replaces the pod
+     with no overlap. The old operator stops its tunnels and the new pod
+     declares the same labels.
+  3. If you ran the separate headless agent, pass the SAME `hle_` key you
+     enrolled it with, and set `agent.enabled=false` (its dashboard endpoints
+     carry over). A different key leaves those endpoints with the old agent.
+
+Rolling back:
+  helm rollback <release>
+  Legacy mode resumes; the cluster rows remain on the server but no agent
+  connects with that enrollment, so nothing runs twice. Re-upgrading
+  re-declares them.
+
+{{- else }}
+
+You are running LEGACY mode: the original full-account `apiKey` operator. It is
+deprecated in favour of agent mode (a tunnel-scoped `hle_` credential, no
+account-wide key). To migrate:
+
+  helm upgrade {{ .Release.Name }} {{ .Chart.Name }} \
+    --set credential.value=hle_your_agent_key_here
+
+Once `credential.*` (or `agent.token.*`) is set, auto-detect flips the release
+to agent mode and the operator pod is replaced. To roll back use
+`helm rollback`; legacy mode resumes and no agent connects with that
+enrollment.
+
+{{- end }}
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}

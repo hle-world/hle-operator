@@ -1,8 +1,85 @@
-# The operator: HLETunnel CRDs and Ingress adoption, the declarative path.
-# Set to false to install the agent alone.
+# hle-operator: one Deployment that is both the cluster agent and (optionally)
+# the CRD/Ingress GitOps operator.
+#
+# Agent mode (the default): a plain install with a tunnel-scoped `hle_` key
+# gives you a cluster you control from the hle.world dashboard and the `hle`
+# CLI — expose Services, set access rules, read status. Nothing is written to
+# the cluster. The CRD/Ingress reconciler layers on top when
+# `gitops.enabled=true`.
+#
+# Legacy mode keeps the original full-account apiKey operator exactly as it
+# was. It is selected automatically when only `apiKey.*` is set (see `mode`)
+# and is deprecated.
+
+# Mode: "" (auto) | agent | legacy.
+# Auto picks agent unless only `apiKey.*` is set — an older install that holds
+# a full-account key and no agent credential. Agent mode is the default.
+mode: ""
+
+# The single HLE credential.
+#   Agent mode: the tunnel-scoped `hle_` key (or a legacy `hlea_` token).
+#   Legacy mode: the full-account API key.
+#
+# Inline (the chart creates the Secret):
+#   helm upgrade --install hle-operator oci://ghcr.io/hle-world/charts/hle-operator \
+#     --set credential.value=hle_your_key_here
+# Existing Secret:
+#   kubectl create secret generic hle-credential --from-literal=credential=hle_...
+#   helm upgrade --install hle-operator oci://ghcr.io/hle-world/charts/hle-operator \
+#     --set credential.existingSecret=hle-credential
+#
+# The old `apiKey.*` and `agent.token.*` values are still honoured and mapped
+# onto this one for upgrades; see the README migration section.
+credential:
+  value: ""              # credential value — chart creates a Secret if set
+  existingSecret: ""     # name of an existing Secret (takes precedence over value)
+  secretKey: credential  # key within the Secret
+
+# The CRD/Ingress reconciler, layered on top of the agent. Tunnels it declares
+# show as read-only ("managed in git") in the dashboard. Set false for a pure
+# dashboard/CLI agent.
+gitops:
+  enabled: true
+
+  # Secret names the agent may `get` for visitor basic auth
+  # (`hle.world/basic-auth-secret`). Reads are get-only — never list/watch.
+  secretResourceNames: []
+
+  # Cluster-wide Secret get, for basic-auth Secrets whose names are not known
+  # ahead of time. Off by default: it is the widest grant in this chart and the
+  # reason the legacy operator held one. Prefer `secretResourceNames`.
+  clusterWideSecretGet: false
+
+# Namespaces the agent may see and expose. Empty means cluster-wide. When set,
+# RBAC is granted through per-namespace Roles rather than a ClusterRole.
+scope:
+  namespaces: []
+
+# Zero-downtime `helm upgrade` via the server's P6 handover admission. Leave
+# false until the server and client honour `HLE_HANDOVER_GROUP`; until then a
+# rollout replaces the pod (Recreate), which drops tunnels for a few seconds.
+handover:
+  enabled: false
+
+# Raw URLs (IP literals and non-cluster hostnames) as tunnel targets. Off by
+# default: a Kubernetes agent exposes Services by name. The Kubernetes API,
+# cloud metadata, node IPs, loopback and 0.0.0.0 are refused whatever this is.
+allowRawUrls: false
+
+# Relay override, e.g. a self-hosted HLE server.
+relay:
+  host: ""
+  port: ""
+
+# Legacy operator toggle. In legacy mode the operator Deployment is installed
+# when true; in agent mode the agent is installed when either this or
+# `agent.enabled` is true. Set both false to render no pod. In agent mode
+# `operator.enabled=false` also turns GitOps off (an old agent-only install).
 operator:
   enabled: true
 
+# Honoured in legacy mode. Agent mode pins replicas to 1: one enrollment is one
+# machine, and two pods on the same credential would fight over the endpoints.
 replicaCount: 1
 
 image:
@@ -13,17 +90,6 @@ image:
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
-
-# HLE API key configuration.
-# Option 1: Provide the key directly (chart creates the Secret):
-#   helm upgrade --install hle-operator oci://ghcr.io/hle-world/charts/hle-operator --set apiKey.value=hle_your_key_here
-# Option 2: Reference an existing Secret:
-#   kubectl create secret generic hle-api-key --from-literal=api-key=hle_...
-#   helm upgrade --install hle-operator oci://ghcr.io/hle-world/charts/hle-operator --set apiKey.existingSecret=hle-api-key
-apiKey:
-  value: ""              # API key value — chart creates a Secret if set
-  existingSecret: ""     # Name of an existing Secret (takes precedence over value)
-  secretKey: api-key     # Key within the Secret
 
 serviceAccount:
   create: true
@@ -42,70 +108,58 @@ tolerations: []
 affinity: {}
 
 # ---------------------------------------------------------------------------
-# The agent: one process holding every tunnel you declare in the dashboard.
+# Deprecated values, mapped onto `credential` for upgrades.
 #
-# The imperative counterpart to the operator. Endpoints are added and removed
-# at https://hle.world/dashboard and the agent converges within seconds — no
-# CRDs, no redeploy. The two are independent and can run side by side; enable
-# whichever path you want.
+#   apiKey.value / apiKey.existingSecret              -> legacy mode credential
+#   agent.token.value / agent.token.existingSecret    -> agent mode credential
 #
-#   helm upgrade --install hle oci://ghcr.io/hle-world/charts/hle-operator \
-#     --set operator.enabled=false \
-#     --set agent.enabled=true \
-#     --set agent.token.value=hlea_your_token_here
+# New installs should use `credential`. These keep working so an existing
+# release upgrades without changing its Secret references.
+# ---------------------------------------------------------------------------
+apiKey:
+  value: ""
+  existingSecret: ""
+  secretKey: api-key
+
+# ---------------------------------------------------------------------------
+# Legacy agent container toggles.
 #
-# Get the token from Dashboard -> Agents -> New Agent. It is shown once.
+# The agent used to run as a separate pod from the headless `hle-docker` image
+# (`agent.enabled=true`). It now runs inside the operator pod. For one release
+# the separate Deployment still renders when the chart is in legacy mode and
+# `agent.enabled=true`, for users who ran both.
 # ---------------------------------------------------------------------------
 agent:
   enabled: false
 
   image:
-    # The headless distribution image: the CLI with no local web UI. Running it
-    # with an agent token starts `hle agent run` in the foreground.
     repository: ghcr.io/hle-world/hle-docker
-    # `headless` is a floating tag, so pullPolicy is Always: a pod restart picks
-    # up the current build instead of reusing whatever the node cached. Pin a
-    # per-version tag (e.g. tag: "2609.6-headless") for reproducible rollouts; with a
-    # pinned tag IfNotPresent is fine.
     tag: headless
     pullPolicy: Always
 
-  # Agent enrollment token (hlea_…). Same two options as apiKey above.
   token:
-    value: ""              # chart creates a Secret if set
-    existingSecret: ""     # name of an existing Secret (takes precedence)
+    value: ""
+    existingSecret: ""
     secretKey: agent-token
 
   discovery:
-    # Grants the agent a read-only, cluster-wide view of Services and
-    # Endpoints, so the dashboard can list what is running and turn any of it
-    # into a tunnel in one click. The agent never writes to the cluster.
-    #
-    # With this off, the agent still works — you type service URLs yourself.
+    # Read-only, cluster-wide view of Services and Endpoints, so the dashboard
+    # can list what is running and turn any of it into a tunnel. The agent
+    # never writes to the cluster. Off in agent mode means no discovery RBAC
+    # (the token stays mounted: the process always loads Kubernetes config).
     enabled: true
 
     # Scope is cluster-wide but opt-out: these namespaces are never reported.
-    # The system namespaces are infrastructure, and in kube-system's case
-    # actively dangerous to put on the internet.
     excludeNamespaces:
       - kube-system
       - kube-public
       - kube-node-lease
 
-    # Any namespace labelled with this selector is skipped too, so a cluster
-    # admin can opt a namespace out without editing this Helm release, e.g.
-    #   kubectl label namespace secrets hle.world/expose=denied
+    # Any namespace labelled with this selector is skipped too.
     excludeLabel: "hle.world/expose=denied"
 
   # Firepuncher (`hle fp --agent`) turns the agent into a dialer for other
-  # machines' services on demand. It is off by default for cluster agents: a
-  # cluster agent advertises the tunnels declared in the dashboard, and should
-  # not double as a jump host into the cluster network. Opt in if you want it.
-  #
-  # NOTE: hle-client does not read HLE_FIREPUNCHER_ENABLED yet. The env var is
-  # wired up here so the value is already in place; honouring it lands in
-  # hle-client. Until then the agent still advertises the firepuncher
-  # capability and this toggle has no effect.
+  # machines' services on demand. Off for cluster agents.
   firepuncher:
     enabled: false
 
@@ -113,11 +167,6 @@ agent:
     create: true
     name: ""
     annotations: {}
-
-  # The agent dials out and holds no inbound listener, so it needs no Service,
-  # no Ingress, and no published port. There is deliberately no replicaCount:
-  # an enrollment identifies one machine, and a second replica on the same
-  # token would be a second claimant on the same endpoints.
 
   resources:
     requests:

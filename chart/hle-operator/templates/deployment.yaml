@@ -1,4 +1,6 @@
-{{- if .Values.operator.enabled -}}
+{{- if or .Values.operator.enabled .Values.agent.enabled -}}
+{{- $mode := include "hle-operator.mode" . -}}
+{{- $agent := eq $mode "agent" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,7 +8,25 @@ metadata:
   labels:
     {{- include "hle-operator.labels" . | nindent 4 }}
 spec:
+  {{- if $agent }}
+  # One enrollment is one machine, so agent mode pins a single replica.
+  # `maxSurge` below is what gives a rollout a canary; a second steady replica
+  # would trade the agent identity back and forth.
+  replicas: 1
+  strategy:
+    {{- if .Values.handover.enabled }}
+    # Zero-drop rollout via the server's P6 handover admission. Requires P6 on
+    # the relay and hle-client; until then Recreate is the safe choice.
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    {{- else }}
+    type: Recreate
+    {{- end }}
+  {{- else }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "hle-operator.selectorLabels" . | nindent 6 }}
@@ -14,52 +34,155 @@ spec:
     metadata:
       labels:
         {{- include "hle-operator.selectorLabels" . | nindent 8 }}
+      {{- if and $agent .Values.agent.podAnnotations }}
+      annotations:
+        {{- toYaml .Values.agent.podAnnotations | nindent 8 }}
+      {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "hle-operator.serviceAccountName" . }}
+      {{- if $agent }}
+      # The process loads Kubernetes config and starts kopf in every agent-mode
+      # run (even with gitops off), so it always needs the projected token.
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        # Numeric: the image's `hleop` user is uid 1001, and runAsNonRoot
+        # cannot verify a user name.
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- end }}
       containers:
         - name: operator
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
-            - name: HLE_API_KEY
+            - name: {{ if $agent }}HLE_AGENT_TOKEN{{ else }}HLE_API_KEY{{ end }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.apiKey.existingSecret | default (printf "%s-api-key" (include "hle-operator.fullname" .)) }}
-                  key: {{ .Values.apiKey.secretKey }}
-            # Tells the relay this operator runs in Kubernetes. hle-client
-            # does not read it yet; it is set now so the value is in place
-            # when it does.
+                  {{- $cred := include "hle-operator.credentialSpec" (dict "ctx" . "for" "operator") | fromJson }}
+                  name: {{ $cred.name }}
+                  key: {{ $cred.key }}
+            - name: HLE_OPERATOR_MODE
+              value: {{ $mode | quote }}
+            # Tells the relay this operator runs in Kubernetes.
             - name: HLE_INSTALL_METHOD
               value: kubernetes
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            {{- if $agent }}
+            - name: HLE_GITOPS
+              value: {{ ternary "true" "false" (not (empty (include "hle-operator.gitops" .))) | quote }}
+            # Unique per release, so the server's handover admission can tell
+            # one rollout's successor from another release.
+            - name: HLE_HANDOVER_GROUP
+              value: {{ printf "%s/%s" .Release.Namespace .Release.Name | lower | quote }}
+            # The agent writes its enrollment and readiness marker here; the
+            # readiness probe re-reads it in a separate process.
+            - name: HLE_HOME
+              value: /data
+            - name: HLE_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # Lets the target guard refuse the node's own address.
+            - name: HLE_NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: HLE_ALLOW_RAW_URLS
+              value: {{ .Values.allowRawUrls | quote }}
+            # See agent.firepuncher: off by default for cluster agents.
+            - name: HLE_FIREPUNCHER_ENABLED
+              value: {{ .Values.agent.firepuncher.enabled | quote }}
+            {{- if .Values.agent.discovery.enabled }}
+            # Namespace opt-out, cluster-wide read.
+            - name: HLE_DISCOVERY_EXCLUDE_NAMESPACES
+              value: {{ join "," .Values.agent.discovery.excludeNamespaces | quote }}
+            - name: HLE_DISCOVERY_EXCLUDE_LABEL
+              value: {{ .Values.agent.discovery.excludeLabel | quote }}
+            {{- end }}
+            {{- if .Values.scope.namespaces }}
+            - name: HLE_NAMESPACES
+              value: {{ join "," .Values.scope.namespaces | quote }}
+            {{- end }}
+            {{- if .Values.relay.host }}
+            - name: HLE_RELAY_HOST
+              value: {{ .Values.relay.host | quote }}
+            {{- end }}
+            {{- if .Values.relay.port }}
+            - name: HLE_RELAY_PORT
+              value: {{ .Values.relay.port | quote }}
+            {{- end }}
+            {{- with .Values.agent.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: health
               containerPort: 8080
               protocol: TCP
+          {{- if $agent }}
+          # Ready only once a welcomed control connection has recorded its pid
+          # under HLE_HOME. A missing token or a dropped channel keeps the pod
+          # out of Service endpoints.
+          readinessProbe:
+            exec:
+              command: ["hle", "agent", "status", "--ready"]
+            initialDelaySeconds: 5
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
               port: health
             initialDelaySeconds: 10
             periodSeconds: 30
+          {{- if $agent }}
+          volumeMounts:
+            # Enrollment and readiness state. Losing it costs a reconnect, not
+            # a re-enrollment, so it does not need a PVC.
+            - name: data
+              mountPath: /data
+            # The root filesystem is read-only; Python and kopf want a tmp.
+            - name: tmp
+              mountPath: /tmp
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-      {{- with .Values.nodeSelector }}
+          {{- if $agent }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          {{- end }}
+      {{- if $agent }}
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+      {{- end }}
+      {{- /* An upgrade from the separate agent keeps its placement values. */}}
+      {{- with (or .Values.nodeSelector (and $agent .Values.agent.nodeSelector)) }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tolerations }}
+      {{- with (or .Values.tolerations (and $agent .Values.agent.tolerations)) }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- with (or .Values.affinity (and $agent .Values.agent.affinity)) }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}

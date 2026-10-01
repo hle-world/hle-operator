@@ -1,16 +1,96 @@
-{{- if and .Values.agent.enabled .Values.agent.serviceAccount.create -}}
-apiVersion: v1
-kind: ServiceAccount
+{{/*
+Agent-mode RBAC, bound to the operator ServiceAccount.
+
+Cluster-wide by default. With `scope.namespaces` set the namespaced grants
+become per-namespace Roles; the cluster-scoped grants kopf needs (CRD discovery)
+still need a small ClusterRole, and an opt-in cluster-wide Secret get lives
+there too because a Role cannot grant it.
+*/}}
+{{- if and (eq (include "hle-operator.mode" .) "agent") (or .Values.agent.discovery.enabled (include "hle-operator.gitops" .)) }}
+{{- if .Values.scope.namespaces }}
+{{- range .Values.scope.namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
 metadata:
-  name: {{ include "hle-operator.agentServiceAccountName" . }}
+  name: {{ include "hle-operator.fullname" $ }}
+  namespace: {{ . }}
   labels:
-    {{- include "hle-operator.agentLabels" . | nindent 4 }}
-  {{- with .Values.agent.serviceAccount.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- include "hle-operator.labels" $ | nindent 4 }}
+rules:
+  {{- include "hle-operator.agentNamespaceRules" $ | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "hle-operator.fullname" $ }}
+  namespace: {{ . }}
+  labels:
+    {{- include "hle-operator.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "hle-operator.fullname" $ }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "hle-operator.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
 {{- end }}
-{{- if and .Values.agent.enabled .Values.agent.discovery.enabled }}
+{{- if include "hle-operator.gitops" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "hle-operator.fullname" . }}-cluster
+  labels:
+    {{- include "hle-operator.labels" . | nindent 4 }}
+rules:
+  {{- include "hle-operator.agentClusterRules" . | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "hle-operator.fullname" . }}-cluster
+  labels:
+    {{- include "hle-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "hle-operator.fullname" . }}-cluster
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "hle-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- else }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "hle-operator.fullname" . }}
+  labels:
+    {{- include "hle-operator.labels" . | nindent 4 }}
+rules:
+  {{- include "hle-operator.agentNamespaceRules" . | nindent 2 }}
+  {{- include "hle-operator.agentClusterRules" . | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "hle-operator.fullname" . }}
+  labels:
+    {{- include "hle-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "hle-operator.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "hle-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}
+{{- if and (eq (include "hle-operator.mode" .) "legacy") .Values.agent.enabled .Values.agent.discovery.enabled }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
