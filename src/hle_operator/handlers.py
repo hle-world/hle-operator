@@ -31,7 +31,7 @@ _ingress_tunnels: dict[str, ManagedTunnel] = {}
 
 
 @kopf.on.startup()
-async def startup(settings: kopf.OperatorSettings, **kwargs) -> None:  # type: ignore[no-untyped-def]
+async def startup(settings: kopf.OperatorSettings, **kwargs) -> None:
     settings.persistence.finalizer = "hle.world/operator-finalizer"
     settings.persistence.progress_storage = kopf.AnnotationsProgressStorage(prefix="hle.world")
     settings.persistence.diffbase_storage = kopf.AnnotationsDiffBaseStorage(prefix="hle.world")
@@ -45,7 +45,7 @@ async def startup(settings: kopf.OperatorSettings, **kwargs) -> None:  # type: i
 
 
 @kopf.on.cleanup()
-async def cleanup(**kwargs) -> None:  # type: ignore[no-untyped-def]
+async def cleanup(**kwargs) -> None:
     logger.info("Shutting down — stopping all tunnels")
     tasks = []
     for tunnel in list(_tunnels.values()):

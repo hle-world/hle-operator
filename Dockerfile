@@ -10,4 +10,4 @@ RUN pip install --no-cache-dir /src
 
 USER hleop
 
-ENTRYPOINT ["kopf", "run", "/src/src/hle_operator/handlers.py", "--liveness=http://0.0.0.0:8080/healthz", "--verbose"]
+ENTRYPOINT ["python", "-m", "hle_operator"]
