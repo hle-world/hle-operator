@@ -46,13 +46,45 @@ helm upgrade --install hle oci://ghcr.io/hle-world/charts/hle-operator \
 
 `agent.discovery.enabled=true` (the default) binds a ClusterRole granting
 `get`, `list` and `watch` on **services** and **endpoints**, cluster-wide. That
-is the entire grant. The agent never creates, patches or deletes anything, and
-`kube-system`, `kube-public` and `kube-node-lease` are skipped before the list
-is reported.
+is the entire grant. The agent never creates, patches or deletes anything.
 
-Turn it off with `--set agent.discovery.enabled=false` and the agent stops
+Scope is cluster-wide but **opt-out**. `agent.discovery.excludeNamespaces`
+(default `kube-system`, `kube-public`, `kube-node-lease`) is never reported, and
+any namespace labelled `hle.world/expose=denied` is skipped too:
+
+```bash
+kubectl label namespace secrets hle.world/expose=denied
+```
+
+> The agent is handed these values as `HLE_DISCOVERY_EXCLUDE_NAMESPACES` and
+> `HLE_DISCOVERY_EXCLUDE_LABEL`. hle-client does not read them yet — the
+> client-side filter is landing in hle-client — so the values are wired up
+> ahead of that change.
+
+Turn discovery off with `--set agent.discovery.enabled=false` and the agent stops
 mounting a ServiceAccount token altogether — you then type service URLs into
 the dashboard yourself.
+
+### Cluster-agent defaults
+
+A few defaults differ from a laptop agent, because a cluster is a shared
+network:
+
+- **Firepuncher is off** (`agent.firepuncher.enabled=false`). `hle fp --agent`
+  turns the agent into a dialer for other machines' services; a cluster agent
+  should advertise its declared tunnels, not double as a jump host into the
+  cluster network. Opt in with `--set agent.firepuncher.enabled=true`.
+  The value is passed as `HLE_FIREPUNCHER_ENABLED`, which hle-client does not
+  read yet.
+- **`HLE_INSTALL_METHOD=kubernetes`** is set on both containers so the relay
+  can label the install. hle-client does not read it yet.
+- **Readiness** runs `hle agent status`, which fails when no enrollment token
+  is configured. It does **not** yet prove the relay accepted the agent: the
+  agent keeps no local connection state and hle-client exposes no
+  welcome-aware signal. A welcome-gated probe is a follow-up hle-client change.
+- The operator's `secrets: get` grant stays cluster-wide: the basic-auth and
+  per-tunnel API-key Secrets it reads are referenced by name from CRs and can
+  live in any namespace, so there is no safe static scoping.
 
 ## Features
 
