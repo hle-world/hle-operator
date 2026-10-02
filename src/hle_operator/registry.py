@@ -29,6 +29,7 @@ from hle_common.agent_protocol import (
     DeclaredAckEntry,
     DeclaredEndpoint,
     EndpointSpec,
+    EndpointStatus,
 )
 
 from hle_operator.declared import (
@@ -53,6 +54,12 @@ CUSTOM_GROUP = "hle.world"
 CUSTOM_VERSION = "v1alpha1"
 CUSTOM_PLURAL = "hletunnels"
 
+# Resend delays after the relay answers a label with `conflict` (a legacy
+# tunnel still holds it): one per attempt, then steady. The server rate-limits
+# declarations (burst 5, refill 1/10s); this stays far below that.
+CONFLICT_RETRY_BACKOFF: tuple[float, ...] = (30.0, 60.0, 120.0)
+CONFLICT_RETRY_STEADY: float = 300.0
+
 Kind = Literal["crd", "ingress"]
 VisitorRef = tuple[str, str]
 
@@ -63,6 +70,10 @@ class DeclarationClient(Protocol):
     async def send_declared_endpoints(
         self, endpoints: list[DeclaredEndpoint], revision: int
     ) -> bool: ...
+
+    def endpoint_statuses(self) -> list[EndpointStatus] | None:
+        """None while not connected or not holding the session."""
+        ...
 
 
 class ResourceLister(Protocol):
@@ -276,6 +287,10 @@ class DeclarationRegistry:
         self._dirty = False
         self._send_task: asyncio.Task[None] | None = None
         self._closed = False
+        # Conflict retry: one timer, the attempts made since the last clean ack.
+        self._retry_task: asyncio.Task[None] | None = None
+        self._retry_step = 0
+        self._conflicted: list[str] = []
 
     # -- watch events --------------------------------------------------------
 
@@ -444,6 +459,9 @@ class DeclarationRegistry:
         endpoints = self.declared()
         if not force and endpoints == self._last_sent:
             return True
+        if endpoints != self._last_sent:
+            # A changed desired set restarts the conflict backoff from scratch.
+            self._reset_retry()
         sent = await self._client.send_declared_endpoints(endpoints, self.next_revision())
         self._last_sent = endpoints
         return sent
@@ -487,6 +505,69 @@ class DeclarationRegistry:
         self._ack_revision = ack.revision
         self._ack_seen = True
         self._acks = {entry.label: entry for entry in ack.endpoints}
+        if ack.revision < self._revision:
+            return  # a newer frame is out; its ack decides whether to retry
+        self._conflicted = sorted(e.label for e in ack.endpoints if e.status == "conflict")
+        if not self._conflicted:
+            self._reset_retry()
+        else:
+            self._ensure_retry()
+
+    # -- conflict retry ------------------------------------------------------
+
+    def _reset_retry(self) -> None:
+        self._retry_step = 0
+        self._conflicted = []
+        task = self._retry_task
+        self._retry_task = None
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+
+    def _ensure_retry(self) -> None:
+        if self._closed:
+            return
+        if self._retry_task is not None and not self._retry_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._retry_task = loop.create_task(self._retry_conflicts())
+
+    def _retry_delay(self) -> float:
+        if self._retry_step < len(CONFLICT_RETRY_BACKOFF):
+            return CONFLICT_RETRY_BACKOFF[self._retry_step]
+        return CONFLICT_RETRY_STEADY
+
+    async def _retry_conflicts(self) -> None:
+        """Re-declare the current set until no label is answered with conflict.
+
+        The relay only answers a declaration, so a label freed later (the old
+        pod exits) would otherwise stay Failed until something else changed.
+        """
+        while not self._closed and self._conflicted:
+            delay = self._retry_delay()
+            await asyncio.sleep(delay)
+            if self._closed or not self._conflicted:
+                return
+            if (
+                not self._initial_done
+                or self._client.endpoint_statuses() is None
+                or self._dirty
+                or (self._send_task is not None and not self._send_task.done())
+            ):
+                continue  # not connected / not ready / a debounced send is due
+            logger.info(
+                "Relay reported a conflict for %s; re-declaring (retry %d, waited %gs)",
+                ", ".join(self._conflicted),
+                self._retry_step + 1,
+                delay,
+            )
+            self._retry_step += 1
+            try:
+                await self.send_now(force=True)
+            except Exception:  # noqa: BLE001 — the next round tries again
+                logger.exception("Retrying conflicted declarations failed")
 
     def ack_seen(self) -> bool:
         return self._ack_seen
@@ -712,3 +793,5 @@ class DeclarationRegistry:
         self._closed = True
         if self._send_task is not None and not self._send_task.done():
             self._send_task.cancel()
+        if self._retry_task is not None and not self._retry_task.done():
+            self._retry_task.cancel()
