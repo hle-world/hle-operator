@@ -15,8 +15,9 @@ spec:
   replicas: 1
   strategy:
     {{- if .Values.handover.enabled }}
-    # Zero-drop rollout via the server's P6 handover admission. Requires P6 on
-    # the relay and hle-client; until then Recreate is the safe choice.
+    # Zero-drop rollout (default): the relay hands tunnels over to the new pod by
+    # HLE_HANDOVER_GROUP (relay and hle-client 2610.1+). With handover.enabled=false
+    # (e.g. a relay older than 2610.1) Recreate is the safe choice.
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1
