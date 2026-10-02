@@ -44,6 +44,10 @@ def ingress_body(name: str = "web", namespace: str = "apps") -> dict:
 class FakeClient:
     def __init__(self) -> None:
         self.sent: list[tuple[list[DeclaredEndpoint], int]] = []
+        self.connected = True
+
+    def endpoint_statuses(self) -> list | None:
+        return [] if self.connected else None
 
     async def send_declared_endpoints(
         self, endpoints: list[DeclaredEndpoint], revision: int
@@ -451,3 +455,128 @@ def test_stale_ack_ignored():
     )
     entry = h.registry.ack_for_label("grafana")
     assert entry is not None and entry.status == "accepted"
+
+
+# -- conflict retry ----------------------------------------------------------
+
+
+@pytest.fixture
+def fast_retry(monkeypatch):
+    import hle_operator.registry as mod
+
+    monkeypatch.setattr(mod, "CONFLICT_RETRY_BACKOFF", (0.03, 0.06))
+    monkeypatch.setattr(mod, "CONFLICT_RETRY_STEADY", 0.09)
+
+
+def ack_for(h: Harness, status: str = "conflict") -> DeclaredAck:
+    return DeclaredAck(
+        endpoints=[DeclaredAckEntry(label="grafana", status=status)],
+        revision=h.registry._revision,
+    )
+
+
+async def synced(h: Harness) -> None:
+    h.registry._lister.crds = [crd_body()]
+    await ready(h)
+    h.client.sent.clear()
+
+
+async def test_conflict_ack_resends_after_backoff(fast_retry, caplog):
+    h = Harness()
+    await synced(h)
+    with caplog.at_level("INFO", logger="hle_operator.registry"):
+        h.registry.record_ack(ack_for(h))
+        await asyncio.sleep(0.015)
+        assert h.client.sent == []
+        await asyncio.sleep(0.05)
+    assert len(h.client.sent) == 1
+    assert h.client.last_labels() == ["grafana"]
+    assert any("grafana" in r.getMessage() for r in caplog.records)
+    h.registry.close()
+
+
+async def test_clean_ack_does_not_resend(fast_retry):
+    h = Harness()
+    await synced(h)
+    h.registry.record_ack(ack_for(h, "accepted"))
+    await asyncio.sleep(0.1)
+    assert h.client.sent == []
+
+
+async def test_backoff_grows_then_resets_on_clean_ack(fast_retry):
+    h = Harness()
+    await synced(h)
+    stamps: list[float] = []
+    loop = asyncio.get_running_loop()
+    original = h.client.send_declared_endpoints
+
+    async def conflicting(endpoints, revision):
+        stamps.append(loop.time())
+        result = await original(endpoints, revision)
+        conflict = DeclaredAckEntry(label="grafana", status="conflict")
+        h.registry.record_ack(DeclaredAck(endpoints=[conflict], revision=revision))
+        return result
+
+    h.client.send_declared_endpoints = conflicting  # type: ignore[method-assign]
+    start = loop.time()
+    h.registry.record_ack(ack_for(h))
+    await asyncio.sleep(0.4)
+    assert len(stamps) >= 3
+    gaps = [b - a for a, b in zip([start, *stamps], stamps, strict=False)]
+    assert gaps[0] >= 0.025
+    assert gaps[1] >= 0.055
+    assert gaps[2] >= 0.085
+    # A clean ack resets the step and stops the timer.
+    h.registry.record_ack(ack_for(h, "accepted"))
+    assert h.registry._retry_step == 0
+    count = len(stamps)
+    await asyncio.sleep(0.2)
+    assert len(stamps) == count
+
+
+async def test_set_change_resets_backoff(fast_retry):
+    h = Harness()
+    await synced(h)
+    h.registry._retry_step = 2
+    h.registry.record_ack(ack_for(h))
+    await h.registry.apply_crd(crd_body(name="other", label="other"), schedule=False)
+    await h.registry.send_now()
+    assert h.registry._retry_step == 0
+    assert h.registry._retry_task is None
+    count = len(h.client.sent)
+    await asyncio.sleep(0.15)
+    assert len(h.client.sent) == count  # the stale conflict no longer retries
+
+
+async def test_no_retry_before_initial_sync(fast_retry):
+    h = Harness()
+    conflict = DeclaredAckEntry(label="grafana", status="conflict")
+    h.registry.record_ack(DeclaredAck(endpoints=[conflict], revision=1))
+    await asyncio.sleep(0.12)
+    assert h.client.sent == []
+    h.registry.close()
+
+
+async def test_no_retry_while_disconnected_then_resumes(fast_retry):
+    h = Harness()
+    await synced(h)
+    h.client.connected = False
+    h.registry.record_ack(ack_for(h))
+    await asyncio.sleep(0.12)
+    assert h.client.sent == []
+    h.client.connected = True
+    await asyncio.sleep(0.12)
+    assert h.client.sent
+    h.registry.close()
+
+
+async def test_close_cancels_retry(fast_retry):
+    h = Harness()
+    await synced(h)
+    h.registry.record_ack(ack_for(h))
+    task = h.registry._retry_task
+    assert task is not None
+    h.registry.close()
+    await asyncio.sleep(0.1)
+    assert task.cancelled()
+    assert h.client.sent == []
