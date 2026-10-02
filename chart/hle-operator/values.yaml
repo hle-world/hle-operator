@@ -55,11 +55,12 @@ gitops:
 scope:
   namespaces: []
 
-# Zero-downtime `helm upgrade` via the server's P6 handover admission. Leave
-# false until the server and client honour `HLE_HANDOVER_GROUP`; until then a
-# rollout replaces the pod (Recreate), which drops tunnels for a few seconds.
+# Zero-drop `helm upgrade`: the new pod connects alongside the old one, the relay
+# hands the tunnels over (HLE_HANDOVER_GROUP, relay and hle-client 2610.1+),
+# then the old pod exits. Set false to fall back to Recreate, which drops
+# tunnels for a few seconds, e.g. against a self-hosted relay older than 2610.1.
 handover:
-  enabled: false
+  enabled: true
 
 # Raw URLs (IP literals and non-cluster hostnames) as tunnel targets. Off by
 # default: a Kubernetes agent exposes Services by name. The Kubernetes API,

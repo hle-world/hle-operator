@@ -203,19 +203,19 @@ class TestReadinessProbe:
 
 class TestHandoverStrategy:
     @requires_helm
-    def test_agent_defaults_to_recreate(self):
+    def test_agent_defaults_to_zero_drop_rolling_update(self):
         deployment = _deployment(_render("credential.value=hle_x"), "-operator")
-        assert deployment["spec"]["strategy"]["type"] == "Recreate"
-
-    @requires_helm
-    def test_handover_enables_zero_drop_rolling_update(self):
-        deployment = _deployment(
-            _render("credential.value=hle_x", "handover.enabled=true"), "-operator"
-        )
         assert deployment["spec"]["strategy"] == {
             "type": "RollingUpdate",
             "rollingUpdate": {"maxSurge": 1, "maxUnavailable": 0},
         }
+
+    @requires_helm
+    def test_handover_disabled_renders_recreate(self):
+        deployment = _deployment(
+            _render("credential.value=hle_x", "handover.enabled=false"), "-operator"
+        )
+        assert deployment["spec"]["strategy"]["type"] == "Recreate"
 
     @requires_helm
     def test_legacy_ignores_handover(self):

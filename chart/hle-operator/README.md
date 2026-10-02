@@ -37,7 +37,7 @@ credential. `agent` and `legacy` force the choice.
 | `gitops.secretResourceNames` | `[]` | Secret names the agent may `get` for visitor basic auth. get-only. |
 | `gitops.clusterWideSecretGet` | `false` | Cluster-wide Secret `get` for basic-auth Secrets whose names are unknown ahead of time. Widest grant; prefer `secretResourceNames`. |
 | `scope.namespaces` | `[]` | Namespaces the agent may see/expose. Empty is cluster-wide; set uses per-namespace Roles. |
-| `handover.enabled` | `false` | Zero-drop `RollingUpdate` (maxSurge=1, maxUnavailable=0). Needs P6 on the relay; until then `Recreate`. |
+| `handover.enabled` | `true` | Zero-drop `RollingUpdate` (maxSurge=1, maxUnavailable=0): the relay hands tunnels over to the new pod (needs relay and hle-client 2610.1+). `false` uses `Recreate`. |
 | `allowRawUrls` | `false` | Allow raw URLs as targets. Services only by default; the kube API, metadata, node IPs and loopback are always refused. |
 | `relay.host` / `relay.port` | `""` | Override the HLE relay (self-hosted). |
 | `operator.enabled` | `true` | Installs the pod (agent mode: also when `agent.enabled`). `false` turns GitOps off too, so an old agent-only values file stays a pure agent. |
@@ -79,8 +79,8 @@ Secret get).
    helm upgrade hle-operator oci://ghcr.io/hle-world/charts/hle-operator \
      --reuse-values --set credential.value=hle_your_key_here
    ```
-   Auto-detect flips the release to agent mode and `Recreate` replaces the pod,
-   so there is no overlap. The old operator stops its standalone tunnels and
+   Auto-detect flips the release to agent mode and replaces the pod.
+   The old operator stops its standalone tunnels and
    the new pod declares the same labels — those were plain tunnels before, not
    agent endpoints, so there is no declaration conflict.
 3. If you ran the separate headless agent (`agent.enabled=true`), pass the
@@ -100,13 +100,14 @@ them.
 
 ### Zero-downtime upgrades
 
-Until the relay's P6 handover admission is live, agent mode uses `Recreate` and
-a `helm upgrade` drops each tunnel for a few seconds. Once P6 is deployed on
-the relay and the client, set `handover.enabled=true`:
+`helm upgrade` is zero-drop by default: the new pod connects alongside the old
+one, the relay hands the tunnels over, then the old pod exits. This needs relay
+and hle-client 2610.1 or newer. Against an older self-hosted relay, fall back to
+`Recreate` (a few seconds of dropped tunnels per upgrade):
 
 ```bash
 helm upgrade hle-operator oci://ghcr.io/hle-world/charts/hle-operator \
-  --reuse-values --set handover.enabled=true
+  --reuse-values --set handover.enabled=false
 ```
 
 ## Notes
