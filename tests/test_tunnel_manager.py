@@ -89,6 +89,22 @@ class TestParseCrdSpec:
         result = parse_crd_spec(spec)
         assert result.label == "my-app"
 
+    def test_zone_defaults_to_base_domain(self):
+        result = parse_crd_spec({"serviceRef": {"name": "web", "port": 80}, "label": "web"})
+        assert result.zone is None
+        assert result.apex is False
+
+    def test_zone_and_apex(self):
+        spec = {
+            "serviceRef": {"name": "web", "port": 80},
+            "label": "web",
+            "zone": "T00t.US.",
+            "apex": True,
+        }
+        result = parse_crd_spec(spec)
+        assert result.zone == "t00t.us"
+        assert result.apex is True
+
 
 # ---------------------------------------------------------------------------
 # parse_ingress_annotations
@@ -147,6 +163,17 @@ class TestParseIngressAnnotations:
         assert result.access_control.allowed_users[0] == AccessRule("a@b.com", "google")
         assert result.access_control.allowed_users[1] == AccessRule("c@d.com", "github")
         assert result.access_control.allowed_users[2] == AccessRule("e@f.com", "any")
+
+    def test_zone_annotations(self):
+        annotations = {"hle.world/zone": "t00t.us", "hle.world/apex": "true"}
+        result = parse_ingress_annotations(annotations, self._make_rules())
+        assert result is not None
+        assert result.zone == "t00t.us"
+        assert result.apex is True
+        result = parse_ingress_annotations({}, self._make_rules())
+        assert result is not None
+        assert result.zone is None
+        assert result.apex is False
 
     def test_empty_rules_returns_none(self):
         assert parse_ingress_annotations({}, []) is None
@@ -217,6 +244,27 @@ class TestManagedTunnel:
             MockConfig.assert_called_once()
             call_kwargs = MockConfig.call_args[1]
             assert call_kwargs["managed_by"] == "hle-operator"
+
+            await tunnel.stop()
+
+    @pytest.mark.asyncio
+    async def test_zone_passed_to_tunnel_config(self):
+        spec = self._make_spec(zone="t00t.us", apex=False)
+        tunnel = ManagedTunnel(spec=spec, api_key="hle_test", logger=MagicMock())
+
+        with (
+            patch("hle_operator.tunnel_manager.Tunnel") as MockTunnel,
+            patch("hle_operator.tunnel_manager.TunnelConfig") as MockConfig,
+        ):
+            mock_instance = MockTunnel.return_value
+            mock_instance.connect = AsyncMock()
+            mock_instance.disconnect = AsyncMock()
+
+            await tunnel.start()
+
+            call_kwargs = MockConfig.call_args[1]
+            assert call_kwargs["zone"] == "t00t.us"
+            assert call_kwargs["apex"] is False
 
             await tunnel.stop()
 

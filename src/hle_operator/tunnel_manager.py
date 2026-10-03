@@ -37,6 +37,9 @@ class ManagedTunnelSpec:
     verify_ssl: bool = False
     sync_policy: str = "strict"
     access_control: AccessControlSpec = field(default_factory=AccessControlSpec)
+    # Custom zone to publish under (None = base domain); apex serves at its root.
+    zone: str | None = None
+    apex: bool = False
 
 
 class ManagedTunnel:
@@ -85,6 +88,8 @@ class ManagedTunnel:
             websocket_enabled=self._spec.websocket_enabled,
             forward_host=self._spec.forward_host,
             verify_ssl=self._spec.verify_ssl,
+            zone=self._spec.zone,
+            apex=self._spec.apex,
             managed_by="hle-operator" if self._spec.sync_policy == "strict" else None,
         )
 
@@ -286,7 +291,15 @@ def parse_crd_spec(spec: dict[str, Any]) -> ManagedTunnelSpec:
             allowed_users=allowed_users,
             pin=ac_spec.get("pin"),
         ),
+        zone=_zone(spec.get("zone")),
+        apex=bool(spec.get("apex", False)),
     )
+
+
+def _zone(raw: Any) -> str | None:
+    """Normalise a zone field/annotation: lower-case, no trailing dot, '' -> None."""
+    zone = str(raw or "").strip().lower().rstrip(".")
+    return zone or None
 
 
 def parse_ingress_annotations(
@@ -345,4 +358,6 @@ def parse_ingress_annotations(
             allowed_users=allowed_users,
             pin=pin,
         ),
+        zone=_zone(annotations.get("hle.world/zone")),
+        apex=annotations.get("hle.world/apex", "false").lower() == "true",
     )

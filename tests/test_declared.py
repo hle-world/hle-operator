@@ -112,6 +112,20 @@ class TestCrdToDeclared:
         with pytest.raises(DeclarationError):
             crd_to_declared(crd(label="Bad Label"))
 
+    def test_zone_defaults_to_base_domain(self):
+        result = crd_to_declared(crd())
+        assert result.zone is None
+        assert result.apex is False
+
+    def test_zone_and_apex(self):
+        result = crd_to_declared(crd(zone="T00t.us.", apex=True))
+        assert result.zone == "t00t.us"
+        assert result.apex is True
+
+    def test_apex_requires_zone(self):
+        with pytest.raises(DeclarationError, match="apex requires zone"):
+            crd_to_declared(crd(apex=True))
+
     def test_missing_service_name(self):
         with pytest.raises(DeclarationError):
             crd_to_declared(crd(serviceRef={"port": 80}))
@@ -128,6 +142,13 @@ class TestCrdToDeclared:
 
 
 class TestIngressToDeclared:
+    def test_zone_annotation(self):
+        body = ingress()
+        body["metadata"]["annotations"] = {"hle.world/zone": "t00t.us"}
+        result = ingress_to_declared(body)
+        assert result.zone == "t00t.us"
+        assert result.apex is False
+
     def test_minimal(self):
         result = ingress_to_declared(ingress())
         assert result.label == "web"
