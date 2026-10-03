@@ -74,7 +74,9 @@ spec:
                 label:
                   type: string
                   description: HLE tunnel label (used as subdomain prefix).
-                  pattern: "^[a-z0-9][a-z0-9-]*[a-z0-9]$"
+                  # One DNS label; a single character is valid (e.g. a.example.com),
+                  # matching the relay and declared.py.
+                  pattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
                   maxLength: 63
                 zone:
                   type: string

@@ -9,6 +9,7 @@ migration off `apiKey`/`agent.token`, the handover strategy and scoped RBAC.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -92,6 +93,26 @@ class TestChartMetadata:
         # YAML parses the unquoted `version` as a float, so normalise it; the
         # two fields are bumped together and must stay in lockstep.
         assert str(chart["version"]) == chart["appVersion"]
+
+
+class TestCrdLabelPattern:
+    """The CRD's label pattern agrees with the relay and declared.py."""
+
+    def _pattern(self) -> str:
+        # The CRD is a Helm template (guarded by `{{- if }}`), so read the label's
+        # pattern line rather than parsing the file as YAML.
+        text = (CHART_DIR / "templates" / "crds" / "hletunnel.yaml").read_text()
+        match = re.search(r"label:\n(?:.*\n)*?\s+pattern: \"([^\"]+)\"", text)
+        assert match, "label pattern not found in the CRD"
+        return match.group(1)
+
+    @pytest.mark.parametrize("label", ["a", "ab", "a-b", "jellyfin", "x9"])
+    def test_accepts_valid_labels(self, label: str):
+        assert re.fullmatch(self._pattern(), label)
+
+    @pytest.mark.parametrize("label", ["", "-a", "a-", "A", "a.b", "a_b"])
+    def test_rejects_invalid_labels(self, label: str):
+        assert not re.fullmatch(self._pattern(), label)
 
 
 class TestImageTagDefaults:
