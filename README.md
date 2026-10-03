@@ -214,6 +214,17 @@ kubectl get hlt
 | `pin` | string | 4-8 digit PIN code |
 | `basicAuth.secretRef.name` | string | Secret with `username` and `password` keys |
 
+### spec.zone / spec.apex
+
+Publish under one of your custom zones instead of the base domain:
+
+| Field | Type | Description |
+|---|---|---|
+| `zone` | string | Custom zone, e.g. `t00t.us` → `https://<label>.t00t.us` (in the zone's `clean` subdomain mode). The zone must be active and your account a member of it. |
+| `apex` | boolean | Serve at the bare zone root (`https://t00t.us`). Requires `zone`. |
+
+On an Ingress, use the annotations `hle.world/zone: t00t.us` and `hle.world/apex: "true"`.
+
 ### spec.syncPolicy
 
 - **`strict`** (default) — Operator continuously reconciles access control. Dashboard edits are overwritten every 60 seconds.

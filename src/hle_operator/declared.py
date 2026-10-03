@@ -121,6 +121,15 @@ def _build_access(
         raise DeclarationError(f"invalid access control: {exc}") from exc
 
 
+def _zone_fields(zone: Any, apex: Any) -> dict[str, Any]:
+    """``zone``/``apex`` for a declaration: lower-case zone, '' -> base domain."""
+    zone_s = str(zone or "").strip().lower().rstrip(".") or None
+    apex_b = bool(apex)
+    if apex_b and not zone_s:
+        raise DeclarationError("apex requires zone")
+    return {"zone": zone_s, "apex": apex_b}
+
+
 def _crd_target(spec: Mapping[str, Any], namespace: str) -> K8sServiceTarget:
     ref = spec.get("serviceRef") or {}
     name = ref.get("name") or ""
@@ -161,6 +170,7 @@ def crd_to_declared(body: Mapping[str, Any], *, basic_auth: str | None = None) -
             source_ref=crd_source_ref(body),
             upstream_basic_auth_secret=spec.get("upstreamBasicAuthSecret") or None,
             access=_build_access(_crd_allowed_users(ac), ac.get("pin"), basic_auth),
+            **_zone_fields(spec.get("zone"), spec.get("apex", False)),
         )
     except ValueError as exc:
         # A malformed future CRD field must go to CR status, not kill the loop.
@@ -224,6 +234,10 @@ def ingress_to_declared(
             sync_policy=annotations.get("hle.world/sync-policy", "strict"),
             source_ref=ingress_source_ref(body),
             access=access,
+            **_zone_fields(
+                annotations.get("hle.world/zone"),
+                annotations.get("hle.world/apex", "false").lower() == "true",
+            ),
         )
     except ValueError as exc:
         raise DeclarationError(str(exc)) from exc

@@ -46,6 +46,9 @@ spec:
               required:
                 - serviceRef
                 - label
+              x-kubernetes-validations:
+                - rule: "!has(self.apex) || !self.apex || (has(self.zone) && self.zone != '')"
+                  message: apex requires zone
               properties:
                 serviceRef:
                   type: object
@@ -73,6 +76,20 @@ spec:
                   description: HLE tunnel label (used as subdomain prefix).
                   pattern: "^[a-z0-9][a-z0-9-]*[a-z0-9]$"
                   maxLength: 63
+                zone:
+                  type: string
+                  description: >
+                    Custom zone to publish under (e.g. "t00t.us" serves the tunnel at
+                    <label>.t00t.us). The zone must be active on the relay and the
+                    account a member of it. Empty publishes on the base domain.
+                  pattern: "^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,63}$"
+                  maxLength: 253
+                apex:
+                  type: boolean
+                  description: >
+                    Serve at the bare zone root (e.g. t00t.us) instead of <label>.<zone>.
+                    Requires zone.
+                  default: false
                 authMode:
                   type: string
                   description: Authentication mode for the tunnel endpoint.
