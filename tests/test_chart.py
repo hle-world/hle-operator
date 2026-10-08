@@ -32,6 +32,19 @@ def _load(name: str) -> dict:
         return yaml.safe_load(handle)
 
 
+_CALVER_RE = re.compile(r"^v?(\d{4})\.(\d+)(?:\.(\d+))?$")
+
+
+def _calver(text: str) -> tuple[int, int, int]:
+    """Parse a CalVer string (``v`` optional) into comparable ints; a two-part
+    version's missing patch defaults to 0. Raises ValueError on anything else."""
+    match = _CALVER_RE.fullmatch(text.strip())
+    if not match:
+        raise ValueError(f"not a CalVer version: {text!r}")
+    year, minor, patch = match.groups()
+    return (int(year), int(minor), int(patch or 0))
+
+
 def _render(*values: str) -> list[dict[str, Any]]:
     """Render the chart with the given `--set` arguments and return the docs."""
     cmd = [HELM or "helm", "template", "test-release", str(CHART_DIR)]
@@ -97,6 +110,52 @@ class TestChartMetadata:
         app = chart["appVersion"]
         expected = f"{app}.0" if str(app).count(".") == 1 else str(app)
         assert str(chart["version"]) == expected
+
+
+class TestReleaseVersionTracking:
+    """Chart.yaml must never lag behind the newest ``v*`` release tag.
+
+    The release script bumps the chart in a PR *before* the tag is cut, so the
+    in-repo appVersion is either equal to the newest tag (release done) or ahead
+    of it (bump merged, release pending) — never behind. This compares against
+    inequality so it stays green between the merge and the tag.
+    """
+
+    def test_calver_parses_parts_and_rejects_junk(self):
+        assert _calver("2610.4") == (2610, 4, 0)
+        assert _calver("v2610.4.1") == (2610, 4, 1)
+        with pytest.raises(ValueError):
+            _calver("foo")
+
+    def test_app_version_is_not_behind_newest_tag(self):
+        try:
+            result = subprocess.run(
+                ["git", "tag", "--list", "v*"],
+                cwd=CHART_DIR,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pytest.skip("no release tags available")
+
+        tagged = [tag for tag in result.stdout.split() if _CALVER_RE.fullmatch(tag)]
+        if not tagged:
+            pytest.skip("no release tags available")
+        newest_tag = max(tagged, key=_calver)
+
+        chart = _load("Chart.yaml")
+        app_text = str(chart["appVersion"]).strip("\"'")
+        app = _calver(app_text)
+        assert app >= _calver(newest_tag), (
+            f"Chart.yaml appVersion {app_text} is older than release {newest_tag}. "
+            f"Run scripts/release.sh {newest_tag} (or edit version/appVersion in "
+            "chart/hle-operator/Chart.yaml) and commit."
+        )
+
+        expected_version = f"{app_text}.0" if app_text.count(".") == 1 else app_text
+        assert str(chart["version"]) == expected_version
 
 
 class TestCrdLabelPattern:
