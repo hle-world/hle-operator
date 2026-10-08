@@ -17,7 +17,7 @@
 mode: ""
 
 # The single HLE credential.
-#   Agent mode: the tunnel-scoped `hle_` key (or a legacy `hlea_` token).
+#   Agent mode: the tunnel-scoped `hle_` key (or a legacy `hlea_` token).  # docs-guard: allow hlea-agent-token
 #   Legacy mode: the full-account API key.
 #
 # Inline (the chart creates the Secret):

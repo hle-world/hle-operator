@@ -13,7 +13,7 @@ helm upgrade --install hle-operator oci://ghcr.io/hle-world/charts/hle-operator 
 ```
 
 Get the credential from **Dashboard → Agents → New Agent**. It is shown once.
-It is a tunnel-scoped `hle_` key (a legacy `hlea_` token also works); the
+It is a tunnel-scoped `hle_` key (a legacy `hlea_` token also works); the <!-- docs-guard: allow hlea-agent-token -->
 full-account key the old operator used is no longer needed.
 
 ## Modes
