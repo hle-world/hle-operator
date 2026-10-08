@@ -33,6 +33,14 @@ docker build -t hle-operator:dev .
 helm install hle-operator ./chart/hle-operator --set image.tag=dev
 ```
 
+## Releasing
+
+Releases are CalVer (`v2610.4`). Bump the in-repo chart and merge it *before*
+tagging, or a clone installs a stale image: `./scripts/release.sh v2610.5` rewrites
+`chart/hle-operator/Chart.yaml` and prints the diff, then commit on
+`chore/release-v2610.5`, open a PR, merge, and run `gh release create v2610.5`.
+`build.yml` still overrides the version inside the published artifact.
+
 ## Architecture
 
 ### Two input paths, one tunnel manager

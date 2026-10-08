@@ -88,11 +88,15 @@ class TestChartMetadata:
         assert chart["name"] == "hle-operator"
         assert chart["type"] == "application"
 
-    def test_static_version_matches_app_version(self):
+    def test_static_version_tracks_app_version(self):
         chart = _load("Chart.yaml")
-        # YAML parses the unquoted `version` as a float, so normalise it; the
-        # two fields are bumped together and must stay in lockstep.
-        assert str(chart["version"]) == chart["appVersion"]
+        # Helm needs a SemVer chart version, so a two-part CalVer appVersion
+        # (the image tag, e.g. 2610.4) is written with a trailing ".0"; a
+        # three-part one is used as-is. scripts/release.sh and build.yml share
+        # this rule, so both fields stay derived from one release tag.
+        app = chart["appVersion"]
+        expected = f"{app}.0" if str(app).count(".") == 1 else str(app)
+        assert str(chart["version"]) == expected
 
 
 class TestCrdLabelPattern:
