@@ -29,7 +29,7 @@ hle-client 2610.1+) for a zero-drop RollingUpdate.
 {{- end }}
 
 Migrating from the legacy operator:
-  1. Enroll the cluster (Dashboard -> Agents -> New Agent) and copy the
+  1. Enroll the cluster (Dashboard -> Connections -> Agents -> New) and copy the
      tunnel-scoped `hle_` key.
   2. helm upgrade ... --set credential.value=hle_...
      Auto-detect flips the release to agent mode and replaces the pod.

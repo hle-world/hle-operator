@@ -12,7 +12,7 @@ helm upgrade --install hle-operator oci://ghcr.io/hle-world/charts/hle-operator 
   --set credential.value=hle_your_key_here
 ```
 
-Get the credential from **Dashboard → Agents → New Agent**. It is shown once.
+Get the credential from **Dashboard → Connections → Agents → New**. It is shown once.
 It is a tunnel-scoped `hle_` key (a legacy `hlea_` token also works); the
 full-account key the old operator used is no longer needed.
 
@@ -73,7 +73,7 @@ Secret get).
 
 ### From the legacy apiKey operator
 
-1. Enroll the cluster (**Dashboard → Agents → New Agent**) and copy the
+1. Enroll the cluster (**Dashboard → Connections → Agents → New**) and copy the
    tunnel-scoped `hle_` key.
 2. ```bash
    helm upgrade hle-operator oci://ghcr.io/hle-world/charts/hle-operator \
