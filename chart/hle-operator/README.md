@@ -48,7 +48,7 @@ credential. `agent` and `legacy` force the choice.
 | `agent.discovery.enabled` | `true` | Read-only Services/Endpoints discovery. Off drops the grant and the env. |
 | `agent.discovery.excludeNamespaces` | `[kube-system, kube-public, kube-node-lease]` | Namespaces the agent never reports. |
 | `agent.discovery.excludeLabel` | `hle.world/expose=denied` | Namespaces carrying this label are skipped. |
-| `agent.firepuncher.enabled` | `false` | Allow `hle forward --agent` through this agent. Off for cluster agents. |
+| `agent.firepuncher.enabled` | `false` | Allow `hle forward <agent>` through this agent. Off for cluster agents. |
 | `agent.env` | `[]` | Extra environment for the agent container. |
 
 ## RBAC
