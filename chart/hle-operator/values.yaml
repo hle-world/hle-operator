@@ -159,7 +159,7 @@ agent:
     # Any namespace labelled with this selector is skipped too.
     excludeLabel: "hle.world/expose=denied"
 
-  # Firepuncher (`hle fp --agent`) turns the agent into a dialer for other
+  # Firepuncher (`hle forward --agent`) turns the agent into a dialer for other
   # machines' services on demand. Off for cluster agents.
   firepuncher:
     enabled: false
