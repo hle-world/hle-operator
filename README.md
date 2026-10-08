@@ -18,16 +18,16 @@ This chart ships both, and they are independent — install either, or both.
 helm upgrade --install hle oci://ghcr.io/hle-world/charts/hle-operator \
   --set operator.enabled=false \
   --set agent.enabled=true \
-  --set agent.token.value=hlea_your_token_here
+  --set agent.token.value=hle_your_key_here
 ```
 
-Get the token from **Dashboard → Agents → New Agent** — it is shown once. The
+Get the token from **Dashboard → Connections → Agents → New** — it is shown once. The
 pod dials out; nothing is published, and no Service or Ingress is created.
 
 Prefer to hold the token yourself:
 
 ```bash
-kubectl create secret generic hle-agent --from-literal=agent-token=hlea_...
+kubectl create secret generic hle-agent --from-literal=agent-token=hle_...
 helm upgrade --install hle oci://ghcr.io/hle-world/charts/hle-operator \
   --set agent.enabled=true --set agent.token.existingSecret=hle-agent
 ```
