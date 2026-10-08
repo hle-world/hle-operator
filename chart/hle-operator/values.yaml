@@ -17,7 +17,7 @@
 mode: ""
 
 # The single HLE credential.
-#   Agent mode: the tunnel-scoped `hle_` key (or a legacy `hlea_` token).
+#   Agent mode: the tunnel-scoped `hle_` key (or a legacy `hlea_` token).  # docs-guard: allow hlea-agent-token
 #   Legacy mode: the full-account API key.
 #
 # Inline (the chart creates the Secret):
@@ -159,7 +159,7 @@ agent:
     # Any namespace labelled with this selector is skipped too.
     excludeLabel: "hle.world/expose=denied"
 
-  # Firepuncher (`hle fp --agent`) turns the agent into a dialer for other
+  # Firepuncher (`hle forward <agent>`) turns the agent into a dialer for other
   # machines' services on demand. Off for cluster agents.
   firepuncher:
     enabled: false

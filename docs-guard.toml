@@ -1,0 +1,31 @@
+# docs-guard config for hle-operator. The tool and the shared retired-claims
+# list live in hle-world/hle-client (.github/actions/docs-guard/).
+
+[claims]
+# User-facing text only: the READMEs, the install notes helm prints, and the
+# comments in values.yaml (people read them to fill it in). Not src/ or the
+# other templates, where legacy names are legitimate.
+include = [
+  "README.md",
+  "chart/hle-operator/README.md",
+  "chart/hle-operator/templates/NOTES.txt",
+  "chart/hle-operator/values.yaml",
+]
+
+[[impact]]
+name = "Helm chart values and templates"
+paths = ["chart/hle-operator/values.yaml", "chart/hle-operator/templates/**"]
+docs = ["chart/hle-operator/README.md", "chart/hle-operator/templates/NOTES.txt"]
+note = "chart/hle-operator/README.md lists the values and what the chart installs; NOTES.txt is what users see after helm install. Update whichever mentions the value or resource you changed."
+
+[[impact]]
+name = "HLETunnel spec and operator behaviour"
+paths = [
+  "chart/hle-operator/templates/crds/hletunnel.yaml",
+  "src/hle_operator/handlers.py",
+  "src/hle_operator/agent_handlers.py",
+  "src/hle_operator/declared.py",
+  "src/hle_operator/config.py",
+]
+docs = ["README.md"]
+note = "The README documents the HLETunnel spec fields, annotations, and the operator's env/config. Check them against the CRD and handlers."

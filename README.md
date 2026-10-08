@@ -70,7 +70,7 @@ the dashboard yourself.
 A few defaults differ from a laptop agent, because a cluster is a shared
 network:
 
-- **Firepuncher is off** (`agent.firepuncher.enabled=false`). `hle fp --agent`
+- **Firepuncher is off** (`agent.firepuncher.enabled=false`). `hle forward <agent>`
   turns the agent into a dialer for other machines' services; a cluster agent
   should advertise its declared tunnels, not double as a jump host into the
   cluster network. Opt in with `--set agent.firepuncher.enabled=true`.
