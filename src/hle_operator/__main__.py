@@ -2,8 +2,9 @@
 
 Agent mode (the default) runs ``AgentClient`` and kopf together: kopf watches
 CRs and Ingresses and declares them; the agent runs every tunnel, cluster-owned
-ones included. Legacy mode runs the original apiKey kopf operator alone,
-exactly as ``kopf run handlers.py --liveness=... --verbose`` used to.
+ones included. Legacy mode runs the original apiKey kopf operator alone, as
+``kopf run handlers.py --liveness=...`` did (``--verbose`` only with
+``HLE_OPERATOR_DEBUG=1``).
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 import sys
 
@@ -30,12 +32,21 @@ LIVENESS_ENDPOINT = "http://0.0.0.0:8080/healthz"
 STOP_TIMEOUT = 20.0
 
 
+def _debug_logging() -> bool:
+    """True when HLE_OPERATOR_DEBUG asks for DEBUG logging."""
+    return os.environ.get("HLE_OPERATOR_DEBUG", "").strip().lower() in ("1", "true", "yes")
+
+
 def main() -> int:
     cfg = load_operator_config()
     try:
         if cfg.mode is OperatorMode.LEGACY:
-            # The same logging `kopf run --verbose` set up before.
-            kopf.configure(verbose=True)
+            # INFO by default. `--verbose` logging (DEBUG for every library)
+            # used to be always on: it logged each WebSocket frame and HTTP
+            # call of every tunnel, which in one process serving all tunnels
+            # cost a large share of the CPU that streaming needs.
+            # HLE_OPERATOR_DEBUG=1 brings it back for troubleshooting.
+            kopf.configure(verbose=_debug_logging())
             return asyncio.run(_run_legacy(cfg))
         logging.basicConfig(
             level=logging.INFO,
