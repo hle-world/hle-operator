@@ -13,8 +13,10 @@ dependencies = [
     "kopf>=1.37",
     "kubernetes>=28.0",
     # Agent mode needs 2610.1: protocol 1.4 declared_endpoints, DeclaredAccess,
-    # spec_resolver, endpoint_statuses and HLE_HANDOVER_GROUP.
-    "hle-client>=2610.1",
+    # spec_resolver, endpoint_statuses and HLE_HANDOVER_GROUP. 2610.10 bounds
+    # memory under many parallel downloads (one process serves every tunnel in
+    # legacy mode, so unbounded streaming OOM-killed the whole pod).
+    "hle-client>=2610.10",
 ]
 
 [project.optional-dependencies]
