@@ -16,7 +16,7 @@ dependencies = [
     # spec_resolver, endpoint_statuses and HLE_HANDOVER_GROUP. 2610.10 bounds
     # memory under many parallel downloads (one process serves every tunnel in
     # legacy mode, so unbounded streaming OOM-killed the whole pod).
-    "hle-client>=2610.10",
+    "hle-client>=2610.11",
 ]
 
 [project.optional-dependencies]
