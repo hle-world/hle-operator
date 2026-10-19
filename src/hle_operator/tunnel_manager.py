@@ -5,11 +5,45 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from hle_client.api import ApiClient, ApiClientConfig
+from hle_client.k8s_targets import KubernetesTargetGuard, authority_of
 from hle_client.tunnel import Tunnel, TunnelConfig, TunnelFatalError
+from hle_common.agent_protocol import K8sServiceTarget
+
+
+class SpecError(ValueError):
+    """A legacy-mode manifest cannot become a tunnel; the message is safe for CR status."""
+
+
+class TargetRefused(SpecError):  # noqa: N818 — reads better as a noun at call sites
+    """The target guard refused the upstream (kube API, metadata, excluded namespace...)."""
+
+
+def _default_guard() -> KubernetesTargetGuard:
+    return KubernetesTargetGuard.from_env()
+
+
+def build_service_url(namespace: str, name: str, port: int | str, scheme: str) -> str:
+    """The in-cluster URL of a Service, validated field by field.
+
+    Every part is checked as a Kubernetes name, port and scheme before it is
+    joined, so no field can carry a host, a path or a fragment into the URL.
+    """
+    try:
+        target = K8sServiceTarget(
+            namespace=namespace,
+            name=name,
+            port=port,
+            scheme=scheme,  # type: ignore[arg-type]  # validated by K8sServiceTarget
+        )
+    except ValueError as exc:
+        raise SpecError(f"invalid service reference: {exc}") from exc
+    return f"{target.scheme}://{target.name}.{target.namespace}.svc:{target.port}"
 
 
 @dataclass
@@ -42,6 +76,14 @@ class ManagedTunnelSpec:
     apex: bool = False
 
 
+# How often a running tunnel re-runs the target guard (CRD and Ingress alike).
+RECHECK_INTERVAL = 60.0
+
+# Called as ``on_refused(tunnel, message)`` after a running tunnel was stopped
+# because its target is no longer allowed.
+RefusedCallback = Callable[["ManagedTunnel", str], Awaitable[None]]
+
+
 class ManagedTunnel:
     """Manages a single HLE tunnel with access control reconciliation."""
 
@@ -50,10 +92,18 @@ class ManagedTunnel:
         spec: ManagedTunnelSpec,
         api_key: str,
         logger: logging.Logger,
+        guard: KubernetesTargetGuard | None = None,
+        on_refused: RefusedCallback | None = None,
+        recheck_interval: float = RECHECK_INTERVAL,
     ) -> None:
+        self._on_refused = on_refused
+        self._recheck_interval = recheck_interval
+        self._recheck_task: asyncio.Task[None] | None = None
         self._spec = spec
         self._api_key = api_key
         self._logger = logger
+        self._guard = guard
+        self._pinned_address: str | None = None
         self._tunnel: Tunnel | None = None
         self._task: asyncio.Task[None] | None = None
         self._subdomain: str | None = None
@@ -73,15 +123,36 @@ class ManagedTunnel:
         return self._tunnel is not None and self._tunnel.is_connected
 
     async def start(self) -> None:
+        """Start the tunnel and the periodic target recheck.
+
+        Raises :class:`TargetRefused` when the guard refuses the target.
+        """
+        await self._start_connection()
+        if self._recheck_task is None or self._recheck_task.done():
+            self._recheck_task = asyncio.create_task(self._recheck_loop())
+
+    async def _start_connection(self) -> None:
         """Start the tunnel connection in a background task."""
         if self._task and not self._task.done():
             return
+
+        # The same refusals agent mode applies: the Kubernetes API, cloud
+        # metadata, node addresses, loopback and excluded namespaces.
+        #
+        # The Tunnel dials the upstream itself and has no per-dial hook, so the
+        # address the guard approved is what gets dialled: the URL carries the
+        # approved IP and the original authority travels as the Host header and
+        # TLS server name. A second DNS answer cannot redirect it (rebinding).
+        connect_url, upstream_host = await self._approved_target()
 
         self._stopped = False
         self._connected.clear()
 
         config = TunnelConfig(
-            service_url=self._spec.service_url,
+            service_url=connect_url,
+            upstream_host=upstream_host,
+            # Never route an in-cluster target through an environment proxy.
+            trust_env=False,
             api_key=self._api_key,
             service_label=self._spec.label,
             auth_mode=self._spec.auth_mode,
@@ -99,8 +170,74 @@ class ManagedTunnel:
         )
         self._task = asyncio.create_task(self._run())
 
+    async def _approved_target(self) -> tuple[str, str | None]:
+        """Run the guard; return the URL to dial and the upstream Host/SNI authority."""
+        decision = await (self._guard or _default_guard()).check(self._spec.service_url)
+        if not decision.allowed:
+            raise TargetRefused(f"target refused: {decision.reason}")
+        self._pinned_address = decision.address
+        if decision.address:
+            host = f"[{decision.address}]" if ":" in decision.address else decision.address
+            parsed = urlparse(self._spec.service_url)
+            port = f":{parsed.port}" if parsed.port else ""
+            return (
+                urlunparse(parsed._replace(netloc=f"{host}{port}")),
+                authority_of(self._spec.service_url),
+            )
+        if decision.url and decision.url != self._spec.service_url:
+            return decision.url, authority_of(self._spec.service_url)
+        return self._spec.service_url, None
+
+    async def recheck_target(self) -> None:
+        """Re-run the guard; stop the tunnel if refused, redial if the address moved.
+
+        The address is pinned at start, so a Service recreated with a new
+        ClusterIP would otherwise stay unreachable until the next spec change.
+        Raises :class:`TargetRefused` (after stopping the connection) when the
+        target is no longer allowed.
+        """
+        if self._stopped or self._tunnel is None:
+            return
+        previous = self._pinned_address
+        try:
+            await self._approved_target()
+        except TargetRefused:
+            await self._stop_connection()
+            raise
+        if self._pinned_address != previous:
+            self._logger.info("Upstream address changed; reconnecting")
+            await self._stop_connection()
+            await self._start_connection()
+
+    async def _recheck_loop(self) -> None:
+        """One loop per tunnel, whatever created it (HLETunnel or Ingress)."""
+        while True:
+            await asyncio.sleep(self._recheck_interval)
+            try:
+                await self.recheck_target()
+            except TargetRefused as exc:
+                self._logger.error("Tunnel %s stopped: %s", self._spec.label, exc)
+                if self._on_refused is not None:
+                    try:
+                        await self._on_refused(self, str(exc))
+                    except Exception:
+                        self._logger.exception("Reporting a refused target failed")
+                return
+            except Exception:
+                # A DNS or API blip must not end the loop; try again next round.
+                self._logger.exception("Target recheck failed; retrying")
+
     async def stop(self) -> None:
-        """Stop the tunnel and cancel the background task."""
+        """Stop the tunnel, its recheck loop and the background task."""
+        recheck = self._recheck_task
+        self._recheck_task = None
+        if recheck is not None and recheck is not asyncio.current_task() and not recheck.done():
+            recheck.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await recheck
+        await self._stop_connection()
+
+    async def _stop_connection(self) -> None:
         self._stopped = True
         if self._tunnel:
             await self._tunnel.disconnect()
@@ -260,15 +397,30 @@ class ManagedTunnel:
                 self._logger.exception("Failed to remove basic auth")
 
 
-def parse_crd_spec(spec: dict[str, Any]) -> ManagedTunnelSpec:
-    """Parse an HLETunnel CRD spec into a ManagedTunnelSpec."""
-    service_ref = spec.get("serviceRef", {})
+def parse_crd_spec(
+    spec: dict[str, Any],
+    namespace: str = "default",
+    *,
+    allow_cross_namespace: bool = False,
+) -> ManagedTunnelSpec:
+    """Parse an HLETunnel CRD spec into a ManagedTunnelSpec.
+
+    ``namespace`` is the HLETunnel's own. A ``serviceRef.namespace`` naming
+    another namespace is refused unless ``allow_cross_namespace`` is set.
+    Raises :class:`SpecError`.
+    """
+    service_ref = spec.get("serviceRef") or {}
     svc_name = service_ref.get("name", "")
-    svc_namespace = service_ref.get("namespace", "default")
+    svc_namespace = service_ref.get("namespace") or namespace
+    if svc_namespace != namespace and not allow_cross_namespace:
+        raise SpecError(
+            f"serviceRef.namespace {svc_namespace!r} differs from the HLETunnel namespace "
+            f"{namespace!r}; cross-namespace references are disabled"
+        )
     svc_port = service_ref.get("port", 80)
     svc_protocol = service_ref.get("protocol", "http")
 
-    service_url = f"{svc_protocol}://{svc_name}.{svc_namespace}.svc:{svc_port}"
+    service_url = build_service_url(svc_namespace, svc_name, svc_port, svc_protocol)
 
     ac_spec = spec.get("accessControl", {})
     allowed_users = [

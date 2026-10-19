@@ -178,3 +178,15 @@ def load_api_key() -> str:
 
 def get_api_key() -> str:
     return _api_key
+
+
+# An HLETunnel may only expose a Service in its own namespace. Naming another
+# one lets anyone who can create HLETunnels in one namespace publish a Service
+# from a namespace they have no rights in, so it stays off until the cluster
+# owner turns it on (chart value `gitops.allowCrossNamespace`).
+ALLOW_CROSS_NAMESPACE_ENV = "HLE_ALLOW_CROSS_NAMESPACE"
+
+
+def allow_cross_namespace(env: Mapping[str, str] | None = None) -> bool:
+    env = os.environ if env is None else env
+    return _env_bool(env.get(ALLOW_CROSS_NAMESPACE_ENV), default=False)

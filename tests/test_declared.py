@@ -81,13 +81,13 @@ class TestCrdToDeclared:
                 "port": 8443,
                 "protocol": "https",
             },
-            upstreamBasicAuthSecret="secrets/api#password",
+            upstreamBasicAuthSecret="monitoring/api#password",
         )
-        result = crd_to_declared(body)
+        result = crd_to_declared(body, allow_cross_namespace=True)
         assert result.target is not None
         assert result.target.namespace == "backend"
         assert result.target.scheme == "https"
-        assert result.upstream_basic_auth_secret == "secrets/api#password"
+        assert result.upstream_basic_auth_secret == "monitoring/api#password"
 
     def test_access_control(self):
         body = crd(

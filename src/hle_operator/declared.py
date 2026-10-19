@@ -130,14 +130,22 @@ def _zone_fields(zone: Any, apex: Any) -> dict[str, Any]:
     return {"zone": zone_s, "apex": apex_b}
 
 
-def _crd_target(spec: Mapping[str, Any], namespace: str) -> K8sServiceTarget:
+def _crd_target(
+    spec: Mapping[str, Any], namespace: str, *, allow_cross_namespace: bool = False
+) -> K8sServiceTarget:
     ref = spec.get("serviceRef") or {}
     name = ref.get("name") or ""
     if not name:
         raise DeclarationError("serviceRef.name is required")
+    target_namespace = ref.get("namespace") or namespace
+    if target_namespace != namespace and not allow_cross_namespace:
+        raise DeclarationError(
+            f"serviceRef.namespace {target_namespace!r} differs from the HLETunnel namespace "
+            f"{namespace!r}; cross-namespace references are disabled"
+        )
     try:
         return K8sServiceTarget(
-            namespace=ref.get("namespace") or namespace,
+            namespace=target_namespace,
             name=name,
             port=ref.get("port", 80),
             scheme=ref.get("protocol", "http"),
@@ -146,7 +154,80 @@ def _crd_target(spec: Mapping[str, Any], namespace: str) -> K8sServiceTarget:
         raise DeclarationError(f"invalid serviceRef: {exc}") from exc
 
 
-def crd_to_declared(body: Mapping[str, Any], *, basic_auth: str | None = None) -> DeclaredEndpoint:
+def normalise_secret_ref(ref: str, namespace: str, field: str = "upstreamBasicAuthSecret") -> str:
+    """``name#key`` or ``namespace/name#key`` -> ``namespace/name#key``.
+
+    A Secret is only ever read from the declaring object's own namespace: a
+    reference to another namespace would let whoever writes the manifest make
+    the operator read, and forward, a Secret they cannot read themselves.
+    """
+    path, sep, key = ref.partition("#")
+    if not sep or not key:
+        raise DeclarationError(f"{field} must be 'name#key'")
+    ref_namespace, slash, name = path.rpartition("/")
+    if not slash:
+        ref_namespace = namespace
+    if ref_namespace != namespace:
+        raise DeclarationError(
+            f"{field} namespace {ref_namespace!r} differs from the "
+            f"HLETunnel namespace {namespace!r}; Secrets are read from its own namespace"
+        )
+    if not name:
+        raise DeclarationError(f"{field} must be 'name#key'")
+    return f"{namespace}/{name}#{key}"
+
+
+def crd_pin_secret_ref(body: Mapping[str, Any]) -> str | None:
+    """``namespace/name#key`` of the Secret holding the visitor PIN, if any.
+
+    ``accessControl.pinSecretRef`` is ``{name, key}``; ``key`` defaults to
+    ``pin``. The Secret is always in the HLETunnel's own namespace.
+    """
+    meta = body.get("metadata") or {}
+    namespace = meta.get("namespace") or "default"
+    ac = (body.get("spec") or {}).get("accessControl") or {}
+    ref = ac.get("pinSecretRef")
+    if not ref:
+        return None
+    name = str(ref.get("name") or "") if isinstance(ref, Mapping) else ""
+    if not name:
+        raise DeclarationError("accessControl.pinSecretRef.name is required")
+    key = str(ref.get("key") or "pin")
+    return f"{namespace}/{name}#{key}"
+
+
+def ingress_pin_secret_ref(body: Mapping[str, Any]) -> str | None:
+    """``namespace/name#key`` from the ``hle.world/pin-secret`` annotation (``name[#key]``)."""
+    meta = body.get("metadata") or {}
+    namespace = meta.get("namespace") or "default"
+    raw = ((meta.get("annotations") or {}).get("hle.world/pin-secret") or "").strip()
+    if not raw:
+        return None
+    if "#" not in raw:
+        raw = f"{raw}#pin"
+    return normalise_secret_ref(raw, namespace, "hle.world/pin-secret")
+
+
+def _pin(inline: Any, secret_ref: str | None, secret_value: str | None) -> str | None:
+    """The PIN for a declaration: inline or from a Secret, never both, never missing."""
+    if secret_ref is None:
+        return inline or None
+    if inline:
+        raise DeclarationError("set either an inline pin or a pin Secret, not both")
+    if not secret_value:
+        raise DeclarationError(
+            f"pin Secret {secret_ref.split('#', 1)[0]} is missing, unreadable, or has no such key"
+        )
+    return secret_value
+
+
+def crd_to_declared(
+    body: Mapping[str, Any],
+    *,
+    basic_auth: str | None = None,
+    pin_secret: str | None = None,
+    allow_cross_namespace: bool = False,
+) -> DeclaredEndpoint:
     """Build the declaration for one HLETunnel body.
 
     ``basic_auth`` is the resolved visitor Secret as ``user:pass``; the caller
@@ -157,19 +238,32 @@ def crd_to_declared(body: Mapping[str, Any], *, basic_auth: str | None = None) -
     spec = body.get("spec") or {}
     ac = spec.get("accessControl") or {}
 
+    if spec.get("apiKeyRef"):
+        raise DeclarationError(
+            "apiKeyRef is not supported in agent mode: every tunnel is declared under "
+            "the operator's own credential"
+        )
+    upstream_secret = spec.get("upstreamBasicAuthSecret") or None
+    if upstream_secret:
+        upstream_secret = normalise_secret_ref(str(upstream_secret), namespace)
+
     label = normalise_label(spec.get("label") or (spec.get("serviceRef") or {}).get("name", ""))
     try:
         return DeclaredEndpoint(
             label=label,
-            target=_crd_target(spec, namespace),
+            target=_crd_target(spec, namespace, allow_cross_namespace=allow_cross_namespace),
             auth_mode=spec.get("authMode", "sso"),
             websocket_enabled=spec.get("websocketEnabled", True),
             forward_host=spec.get("forwardHost", False),
             verify_ssl=spec.get("verifySSL", False),
             sync_policy=spec.get("syncPolicy", "strict"),
             source_ref=crd_source_ref(body),
-            upstream_basic_auth_secret=spec.get("upstreamBasicAuthSecret") or None,
-            access=_build_access(_crd_allowed_users(ac), ac.get("pin"), basic_auth),
+            upstream_basic_auth_secret=upstream_secret,
+            access=_build_access(
+                _crd_allowed_users(ac),
+                _pin(ac.get("pin"), crd_pin_secret_ref(body), pin_secret),
+                basic_auth,
+            ),
             **_zone_fields(spec.get("zone"), spec.get("apex", False)),
         )
     except ValueError as exc:
@@ -197,7 +291,7 @@ def _ingress_backend(spec: Mapping[str, Any]) -> tuple[str, int | str]:
 
 
 def ingress_to_declared(
-    body: Mapping[str, Any], *, basic_auth: str | None = None
+    body: Mapping[str, Any], *, basic_auth: str | None = None, pin_secret: str | None = None
 ) -> DeclaredEndpoint:
     """Build the declaration for one ``ingressClassName: hle`` Ingress body."""
     meta = body.get("metadata") or {}
@@ -219,7 +313,7 @@ def ingress_to_declared(
 
     access = _build_access(
         _parse_annotation_users(annotations.get("hle.world/allowed-users", "")),
-        annotations.get("hle.world/pin"),
+        _pin(annotations.get("hle.world/pin"), ingress_pin_secret_ref(body), pin_secret),
         basic_auth,
     )
     try:

@@ -26,6 +26,9 @@ uv run mypy --strict src/
 uv run pytest tests/ -v
 uv run pytest tests/ -k "test_parse_crd" -v
 
+# After changing dependencies: refresh the hashed lock the image installs from
+uv lock && uv export --frozen --no-dev --no-emit-project --format requirements-txt -o requirements.lock
+
 # Build container
 docker build -t hle-operator:dev .
 
@@ -97,7 +100,8 @@ All annotations use the `hle.world/` prefix:
 | `hle.world/auth-mode` | `sso` or `none` | `sso` |
 | `hle.world/sync-policy` | `strict` or `initial` | `strict` |
 | `hle.world/allowed-users` | `email:provider,...` format | (none) |
-| `hle.world/pin` | 4-8 digit PIN | (none) |
+| `hle.world/pin` | 4-8 digit PIN (readable by anyone who can read the Ingress) | (none) |
+| `hle.world/pin-secret` | `name[#key]` of a Secret in the same namespace holding the PIN (key defaults to `pin`) | (none) |
 | `hle.world/basic-auth-secret` | Secret name with username/password | (none) |
 | `hle.world/protocol` | `http` or `https` for upstream | `http` |
 | `hle.world/websocket-enabled` | Enable WS proxying | `true` |

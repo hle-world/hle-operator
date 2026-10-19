@@ -33,10 +33,24 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["list", "watch", "get", "patch"]
-  # Secrets (for API key and basic auth)
+  {{- /*
+  Secrets are read only for what a CR names (basicAuth.secretRef, pinSecretRef,
+  apiKeyRef and the matching Ingress annotations). The operator's own key comes
+  in through the environment and needs no grant. Same opt-in as agent mode: a
+  cluster-wide `get` would let anyone who can create an HLETunnel make the
+  operator read any Secret in their namespace.
+  */}}
+  {{- if .Values.gitops.secretResourceNames }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      {{- toYaml .Values.gitops.secretResourceNames | nindent 6 }}
+    verbs: ["get"]
+  {{- else if .Values.gitops.clusterWideSecretGet }}
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

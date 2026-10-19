@@ -50,6 +50,12 @@ gitops:
   # reason the legacy operator held one. Prefer `secretResourceNames`.
   clusterWideSecretGet: false
 
+  # Let an HLETunnel's serviceRef.namespace name a Service in a different
+  # namespace. Off by default: with it on, anyone who can create HLETunnels in
+  # one namespace can publish any Service in the cluster, in a namespace they
+  # have no rights in. Single-namespace setups are unaffected.
+  allowCrossNamespace: false
+
 # Namespaces the agent may see and expose. Empty means cluster-wide. When set,
 # RBAC is granted through per-namespace Roles rather than a ClusterRole.
 scope:
@@ -156,7 +162,8 @@ agent:
       - kube-public
       - kube-node-lease
 
-    # Any namespace labelled with this selector is skipped too.
+    # Meant to skip any namespace labelled with this selector. NOT enforced yet:
+    # hle-client does not read it. Use excludeNamespaces or scope.namespaces.
     excludeLabel: "hle.world/expose=denied"
 
   # Firepuncher (`hle forward <agent>`) turns the agent into a dialer for other

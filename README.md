@@ -50,16 +50,18 @@ is the entire grant. The agent never creates, patches or deletes anything.
 
 Scope is cluster-wide but **opt-out**. `agent.discovery.excludeNamespaces`
 (default `kube-system`, `kube-public`, `kube-node-lease`) is never reported, and
-any namespace labelled `hle.world/expose=denied` is skipped too:
+any namespace labelled `hle.world/expose=denied` is meant to be skipped too (see the note below):
 
 ```bash
 kubectl label namespace secrets hle.world/expose=denied
 ```
 
 > The agent is handed these values as `HLE_DISCOVERY_EXCLUDE_NAMESPACES` and
-> `HLE_DISCOVERY_EXCLUDE_LABEL`. hle-client does not read them yet — the
-> client-side filter is landing in hle-client — so the values are wired up
-> ahead of that change.
+> `HLE_DISCOVERY_EXCLUDE_LABEL`. hle-client enforces the namespace list, but
+> **does not read the label yet**, so `hle.world/expose=denied` does not hide or
+> protect a namespace today. To keep a namespace out of reach, add it to
+> `agent.discovery.excludeNamespaces`, or restrict the install with
+> `scope.namespaces`.
 
 Turn discovery off with `--set agent.discovery.enabled=false` and the agent stops
 mounting a ServiceAccount token altogether — you then type service URLs into
@@ -82,9 +84,43 @@ network:
   is configured. It does **not** yet prove the relay accepted the agent: the
   agent keeps no local connection state and hle-client exposes no
   welcome-aware signal. A welcome-gated probe is a follow-up hle-client change.
-- The operator's `secrets: get` grant stays cluster-wide: the basic-auth and
-  per-tunnel API-key Secrets it reads are referenced by name from CRs and can
-  live in any namespace, so there is no safe static scoping.
+- **No Secret grant by default**, in either mode. Secrets referenced from CRs
+  (visitor basic auth, PINs, and in legacy mode per-tunnel API keys) are read
+  from the referencing object's own namespace only. Grant the operator the
+  Secrets it needs by name with `gitops.secretResourceNames`, or opt in to a
+  cluster-wide `get` with `gitops.clusterWideSecretGet=true`.
+- **Legacy mode pod is hardened** like the agent pod: non-root, read-only root
+  filesystem, all capabilities dropped, default seccomp profile.
+
+## Security notes
+
+- **Services are exposed from the HLETunnel's own namespace only.**
+  `serviceRef.namespace` must be omitted or equal the HLETunnel's namespace;
+  anything else ends in phase `Failed`. Anyone who can create HLETunnels in a
+  namespace could otherwise publish Services from namespaces they have no rights
+  in. Clusters that rely on cross-namespace references set
+  `gitops.allowCrossNamespace=true` (env `HLE_ALLOW_CROSS_NAMESPACE`); do that
+  only when every HLETunnel author is trusted with every namespace.
+- **A label belongs to whoever declared it first.** If two objects ask for the
+  same label (in the same zone), the one that held it keeps it for as long as it
+  exists; the other ends `Failed` with a message naming the holder. After an
+  operator restart the older object (by `creationTimestamp`) wins. The same
+  label in different zones, or on a zone apex, is not a conflict.
+- **Inline PINs are readable by anyone who can `get` the HLETunnel or Ingress**,
+  and legacy mode copies them into an annotation too. Keep the PIN in a Secret
+  instead: `accessControl.pinSecretRef` (`{name, key}`, key defaults to `pin`) on
+  an HLETunnel, or `hle.world/pin-secret: name[#key]` on an Ingress. The Secret
+  must be in the same namespace, and the tunnel fails closed if it cannot be
+  read.
+- **Legacy mode** validates the Service name, port and scheme, and runs the same
+  target guard as the agent (Kubernetes API, cloud metadata, node addresses and
+  excluded namespaces are refused). The address the guard approves is the one
+  dialled, and it is re-checked every minute: a target that becomes refused
+  stops the tunnel, and a Service that moves is redialled. An update that
+  cannot be applied (an unreadable Secret, a refused target) stops the running
+  tunnel instead of leaving it on its old settings. Legacy mode is deprecated.
+- A PIN Secret that is deleted makes the tunnel fail closed on the next Secret
+  poll (about a minute); a transient API error keeps the last PIN.
 
 ## Features
 
@@ -93,7 +129,7 @@ network:
 - **Access control** — SSO email allowlists (per-provider), PIN protection, Basic Auth
 - **Sync policies** — `strict` (operator is source of truth) or `initial` (dashboard stays editable)
 - **Smart updates** — Access control changes don't restart tunnels
-- **Per-tunnel API keys** — Override the global key for multi-tenant setups
+- **Per-tunnel API keys** — Legacy mode only (deprecated); agent mode marks a tunnel that sets `apiKeyRef` as Failed
 
 ## Quick Start
 
@@ -202,7 +238,7 @@ kubectl get hlt
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | yes | Kubernetes Service name |
-| `namespace` | string | no | Service namespace (defaults to HLETunnel namespace) |
+| `namespace` | string | no | Service namespace. Defaults to, and must equal, the HLETunnel namespace unless `gitops.allowCrossNamespace=true` |
 | `port` | integer | yes | Service port |
 | `protocol` | string | no | `http` (default) or `https` |
 
@@ -211,7 +247,8 @@ kubectl get hlt
 | Field | Type | Description |
 |---|---|---|
 | `allowedUsers` | array | List of `{email, provider}` objects. Provider: `google`, `github`, `hle`, `any` |
-| `pin` | string | 4-8 digit PIN code |
+| `pin` | string | 4-8 digit PIN code. Readable by anyone who can read the object; prefer `pinSecretRef` |
+| `pinSecretRef.name` / `.key` | string | Secret (same namespace) holding the PIN; `key` defaults to `pin`. Exclusive with `pin` |
 | `basicAuth.secretRef.name` | string | Secret with `username` and `password` keys |
 
 ### spec.zone / spec.apex
@@ -232,7 +269,10 @@ On an Ingress, use the annotations `hle.world/zone: zone.example` and `hle.world
 
 ### spec.apiKeyRef
 
-Override the global API key for this specific tunnel:
+**Legacy mode only (deprecated).** Override the global API key for this specific
+tunnel. Agent mode, the default, declares every tunnel under the operator's own
+credential, so an HLETunnel that sets `apiKeyRef` ends `Failed` instead of
+silently landing in the operator owner's account:
 
 ```yaml
 spec:

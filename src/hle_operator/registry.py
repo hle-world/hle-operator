@@ -36,12 +36,15 @@ from hle_operator.declared import (
     INGRESS_CLASS,
     PUBLIC_URL_ANNOTATION,
     DeclarationError,
+    crd_pin_secret_ref,
     crd_source_ref,
     crd_to_declared,
     crd_visitor_secret_ref,
+    ingress_pin_secret_ref,
     ingress_source_ref,
     ingress_to_declared,
     ingress_visitor_secret_ref,
+    normalise_secret_ref,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,6 +65,8 @@ CONFLICT_RETRY_STEADY: float = 300.0
 
 Kind = Literal["crd", "ingress"]
 VisitorRef = tuple[str, str]
+# (zone, apex, label): the same label in two zones is two different hostnames.
+LabelKey = tuple[str, bool, str]
 
 
 class DeclarationClient(Protocol):
@@ -226,7 +231,27 @@ def _upstream_ref(kind: Kind, body: Mapping[str, Any]) -> str | None:
     if kind != "crd":
         return None
     ref = (body.get("spec") or {}).get("upstreamBasicAuthSecret")
-    return str(ref) if ref else None
+    if not ref:
+        return None
+    namespace = (body.get("metadata") or {}).get("namespace") or "default"
+    try:
+        # Only the object's own namespace is ever read; anything else is a
+        # declaration error (see crd_to_declared) and never reaches the API.
+        return normalise_secret_ref(str(ref), namespace)
+    except DeclarationError:
+        return None
+
+
+def _pin_ref(kind: Kind, body: Mapping[str, Any]) -> str | None:
+    """The PIN Secret reference, or None (also when malformed: the build reports it)."""
+    try:
+        return crd_pin_secret_ref(body) if kind == "crd" else ingress_pin_secret_ref(body)
+    except DeclarationError:
+        return None
+
+
+def _label_key(endpoint: DeclaredEndpoint) -> LabelKey:
+    return ((endpoint.zone or "").lower(), bool(endpoint.apex), endpoint.label)
 
 
 def _relevant(source: _Source) -> tuple[Any, ...]:
@@ -256,8 +281,14 @@ class DeclarationRegistry:
         debounce: float = 1.0,
         relist_interval: float = 300.0,
         secret_poll_interval: float = 60.0,
+        allow_cross_namespace: bool = False,
     ) -> None:
         self._client = client
+        # Off: an HLETunnel may only name a Service in its own namespace.
+        self._allow_cross_namespace = allow_cross_namespace
+        # Who holds each (zone, apex, label), as (source_ref, uid). A holder
+        # keeps its label for as long as it exists; see _effective.
+        self._label_holders: dict[LabelKey, tuple[str, str]] = {}
         self._lister = lister or KubernetesLister()
         self._read_secret = read_secret or read_secret_from_kubernetes
         self._read_basic_auth = read_basic_auth or read_basic_auth_from_kubernetes
@@ -273,6 +304,8 @@ class DeclarationRegistry:
         # Secret caches. A visitor value of None means "read, and unusable".
         self._visitor_cache: dict[VisitorRef, str | None] = {}
         self._secret_cache: dict[str, str] = {}
+        # Visitor PINs held in Secrets; None means "read, and unusable".
+        self._pin_cache: dict[str, str | None] = {}
 
         self._acks: dict[str, DeclaredAckEntry] = {}
         self._ack_revision = -1
@@ -316,6 +349,7 @@ class DeclarationRegistry:
         # Rebuild from whatever is stored now: a relist that landed during the
         # prefetch holds the newer body, and a delete leaves nothing to build.
         changed = self._rebuild(source_ref)
+        self._record_holders()
         if schedule and changed:
             self.schedule_send()
 
@@ -346,9 +380,16 @@ class DeclarationRegistry:
                     f"basic-auth Secret {visitor_ref[0]}/{visitor_ref[1]} is missing, "
                     "unreadable, or has no username/password"
                 )
+        pin_ref = _pin_ref(source.kind, source.body)
+        pin_secret = self._pin_cache.get(pin_ref) if pin_ref else None
         if source.kind == "crd":
-            return crd_to_declared(source.body, basic_auth=basic_auth)
-        return ingress_to_declared(source.body, basic_auth=basic_auth)
+            return crd_to_declared(
+                source.body,
+                basic_auth=basic_auth,
+                pin_secret=pin_secret,
+                allow_cross_namespace=self._allow_cross_namespace,
+            )
+        return ingress_to_declared(source.body, basic_auth=basic_auth, pin_secret=pin_secret)
 
     def _rebuild(self, source_ref: str) -> bool:
         """Re-derive one entry from its stored body. True when it changed."""
@@ -372,20 +413,70 @@ class DeclarationRegistry:
 
         Two objects asking for one label would otherwise both be declared and
         the server would keep the last one, while both mirrored its status.
-        The first by source_ref keeps it; the others fail visibly.
+
+        The label belongs to whoever held it first, never to whoever sorts
+        first: a holder keeps it for as long as its object exists (same uid)
+        and still asks for it, so a newcomer, or an object edited to take a
+        label someone already serves, fails and the incumbent is untouched.
+        With no holder yet (first sync, or a restart) the older object wins,
+        by the API server's creationTimestamp, then by source_ref.
         """
+        by_key: dict[LabelKey, list[str]] = {}
+        for source_ref, endpoint in self._endpoints.items():
+            by_key.setdefault(_label_key(endpoint), []).append(source_ref)
+
         endpoints: dict[str, DeclaredEndpoint] = {}
         errors = dict(self._errors)
-        owner: dict[str, str] = {}
-        for source_ref in sorted(self._endpoints):
-            endpoint = self._endpoints[source_ref]
-            holder = owner.get(endpoint.label)
-            if holder is not None:
-                errors[source_ref] = f"label {endpoint.label!r} is already declared by {holder}"
-                continue
-            owner[endpoint.label] = source_ref
-            endpoints[source_ref] = endpoint
+        # A holder that is only failing (a Secret it needs is unreadable) keeps
+        # its place; one that is gone, recreated or moved to another label does not.
+        holders: dict[LabelKey, tuple[str, str]] = {
+            key: held
+            for key, held in self._label_holders.items()
+            if self._still_holds(held[0], held[1])
+        }
+        for key, contenders in by_key.items():
+            failing = holders.get(key)
+            holder = failing[0] if failing else self._current_holder(key, contenders)
+            if holder is None:
+                holder = min(contenders, key=lambda ref: (self._created(ref), ref))
+            holders[key] = (holder, self._uid(holder))
+            if holder in self._endpoints:
+                endpoints[holder] = self._endpoints[holder]
+            for source_ref in contenders:
+                if source_ref != holder:
+                    errors[source_ref] = f"label {key[2]!r} is already declared by {holder}"
+        self._label_holders = holders
         return endpoints, errors
+
+    def _record_holders(self) -> None:
+        """Remember who holds each label as of this event.
+
+        Before the first full list, watch events arrive in no useful order, so
+        holders are only recorded once the initial sync has settled them by age.
+        """
+        if self._initial_done:
+            self._effective()
+
+    def _current_holder(self, key: LabelKey, contenders: list[str]) -> str | None:
+        held = self._label_holders.get(key)
+        if held is None:
+            return None
+        source_ref, uid = held
+        if source_ref in contenders and self._uid(source_ref) == uid:
+            return source_ref
+        return None
+
+    def _still_holds(self, source_ref: str, uid: str) -> bool:
+        """Whether a holder that is currently failing (no endpoint) keeps its label."""
+        if source_ref not in self._sources or self._uid(source_ref) != uid:
+            return False
+        return source_ref not in self._endpoints and source_ref in self._errors
+
+    def _created(self, source_ref: str) -> str:
+        source = self._sources.get(source_ref)
+        if source is None:
+            return ""
+        return str((source.body.get("metadata") or {}).get("creationTimestamp") or "")
 
     # -- finalizer hygiene ---------------------------------------------------
 
@@ -604,6 +695,7 @@ class DeclarationRegistry:
     def _replace(self, sources: dict[str, _Source]) -> None:
         self._sources = sources
         self._rebuild_all()
+        self._effective()  # settle who holds each label, oldest object first
         self._prune_secret_caches()
 
     async def try_initial_sync(self) -> bool:
@@ -684,6 +776,9 @@ class DeclarationRegistry:
                 fetched = await self._fetch_upstream(upstream, strict=strict)
                 if fetched is not None:
                     self._secret_cache[upstream] = fetched
+            pin = _pin_ref(source.kind, source.body)
+            if pin is not None and pin not in self._pin_cache:
+                self._pin_cache[pin] = await self._fetch_upstream(pin, strict=strict)
 
     async def _fetch_visitor(
         self, ref: VisitorRef, last: str | None, *, strict: bool = False
@@ -707,9 +802,25 @@ class DeclarationRegistry:
             logger.warning("Could not read upstream Secret %s", ref)
             return None
 
-    def _referenced(self) -> tuple[set[VisitorRef], set[str]]:
+    async def _fetch_pin(self, ref: str) -> tuple[str | None, bool]:
+        """``(value, gone)``: gone means the Secret or key definitely does not exist.
+
+        Any other failure is transient: ``(None, False)``, so the caller keeps
+        what it had.
+        """
+        try:
+            value = await asyncio.to_thread(self._read_secret, ref)
+        except Exception as exc:  # noqa: BLE001 — the value is never logged
+            if _is_not_found(exc) or isinstance(exc, KeyError):
+                return None, True
+            logger.warning("Could not read PIN Secret %s", ref.split("#", 1)[0])
+            return None, False
+        return (value, False) if value else (None, True)
+
+    def _referenced(self) -> tuple[set[VisitorRef], set[str], set[str]]:
         visitors: set[VisitorRef] = set()
         upstreams: set[str] = set()
+        pins: set[str] = set()
         for source in self._sources.values():
             visitor = _visitor_ref(source.kind, source.body)
             if visitor is not None:
@@ -717,14 +828,19 @@ class DeclarationRegistry:
             upstream = _upstream_ref(source.kind, source.body)
             if upstream is not None:
                 upstreams.add(upstream)
-        return visitors, upstreams
+            pin = _pin_ref(source.kind, source.body)
+            if pin is not None:
+                pins.add(pin)
+        return visitors, upstreams, pins
 
     def _prune_secret_caches(self) -> None:
-        visitors, upstreams = self._referenced()
+        visitors, upstreams, pins = self._referenced()
         for ref in self._visitor_cache.keys() - visitors:
             del self._visitor_cache[ref]
         for key in self._secret_cache.keys() - upstreams:
             del self._secret_cache[key]
+        for key in self._pin_cache.keys() - pins:
+            del self._pin_cache[key]
 
     def resolve_spec(self, spec: EndpointSpec) -> EndpointSpec:
         """``spec_resolver``: fill upstream basic auth from a local Secret.
@@ -754,7 +870,7 @@ class DeclarationRegistry:
         upstream Secret forces a frame so the server's state_sync runs the
         resolver again and the tunnel restarts with the new credential.
         """
-        visitors, upstreams = self._referenced()
+        visitors, upstreams, pins = self._referenced()
         visitor_changed = False
         for ref in visitors:
             last = self._visitor_cache.get(ref)
@@ -762,6 +878,22 @@ class DeclarationRegistry:
             if value != last:
                 visitor_changed = True
             self._visitor_cache[ref] = value
+        # A rotated PIN re-declares, like a rotated visitor password.
+        # A deleted PIN Secret (or key) fails the tunnel closed, like a deleted
+        # visitor Secret; a transient API error keeps the last value.
+        for pin in pins:
+            last_pin = self._pin_cache.get(pin)
+            fetched_pin, gone = await self._fetch_pin(pin)
+            if fetched_pin is not None:
+                if fetched_pin != last_pin:
+                    visitor_changed = True
+                    self._pin_cache[pin] = fetched_pin
+            elif gone:
+                if last_pin is not None:
+                    visitor_changed = True
+                self._pin_cache[pin] = None
+            elif pin not in self._pin_cache:
+                self._pin_cache[pin] = None  # unreadable so far; retried next poll
         upstream_changed = False
         for key in upstreams:
             value = await self._fetch_upstream(key)

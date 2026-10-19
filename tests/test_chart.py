@@ -389,9 +389,84 @@ class TestLegacyMode:
         docs = _render("apiKey.value=hle_old")
         names = _kind_names(docs, "ClusterRole")
         assert "test-release-hle-operator" in names
-        # The legacy operator reads Secrets by name for basic auth.
+        # Secret reads are opt-in, as in agent mode: no cluster-wide get by default.
         role = next(d for d in docs if d.get("kind") == "ClusterRole")
-        assert _rule(role, "secrets")["verbs"] == ["get"]
+        assert all("secrets" not in rule.get("resources", []) for rule in _rules(role))
+
+    @requires_helm
+    def test_legacy_secret_get_is_scoped_by_resource_names(self):
+        docs = _render("apiKey.value=hle_old", "gitops.secretResourceNames={basic-a}")
+        role = next(d for d in docs if d.get("kind") == "ClusterRole")
+        rule = _rule(role, "secrets")
+        assert rule["verbs"] == ["get"]
+        assert rule["resourceNames"] == ["basic-a"]
+
+    @requires_helm
+    def test_legacy_cluster_wide_secret_get_is_opt_in(self):
+        docs = _render("apiKey.value=hle_old", "gitops.clusterWideSecretGet=true")
+        role = next(d for d in docs if d.get("kind") == "ClusterRole")
+        rule = _rule(role, "secrets")
+        assert rule["verbs"] == ["get"]
+        assert "resourceNames" not in rule
+
+    @requires_helm
+    def test_legacy_pod_is_hardened(self):
+        deployment = _deployment(_render("apiKey.value=hle_old"), "-operator")
+        pod = deployment["spec"]["template"]["spec"]
+        assert pod["securityContext"]["runAsNonRoot"] is True
+        assert pod["securityContext"]["runAsUser"] == 1001
+        assert pod["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}
+        container = _container(deployment, "operator")
+        assert container["securityContext"] == {
+            "allowPrivilegeEscalation": False,
+            "readOnlyRootFilesystem": True,
+            "capabilities": {"drop": ["ALL"]},
+        }
+        assert {m["mountPath"] for m in container["volumeMounts"]} == {"/tmp"}  # noqa: S108
+        assert pod["volumes"] == [{"name": "tmp", "emptyDir": {}}]
+        assert _env(container)["HOME"] == "/tmp"
+
+
+class TestCrossNamespace:
+    @requires_helm
+    @pytest.mark.parametrize("values", [["credential.value=hle_x"], ["apiKey.value=hle_old"]])
+    def test_off_by_default(self, values: list[str]):
+        deployment = _deployment(_render(*values), "-operator")
+        assert _env(_container(deployment, "operator"))["HLE_ALLOW_CROSS_NAMESPACE"] == "false"
+
+    @requires_helm
+    def test_opt_in_is_passed_through(self):
+        docs = _render("credential.value=hle_x", "gitops.allowCrossNamespace=true")
+        deployment = _deployment(docs, "-operator")
+        assert _env(_container(deployment, "operator"))["HLE_ALLOW_CROSS_NAMESPACE"] == "true"
+
+
+class TestCrd:
+    @requires_helm
+    def test_service_name_is_a_dns_label(self):
+        crd = next(
+            d
+            for d in _render("credential.value=hle_x")
+            if d.get("kind") == "CustomResourceDefinition"
+        )
+        spec = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+        name = spec["properties"]["serviceRef"]["properties"]["name"]
+        assert name["maxLength"] == 63
+        assert re.fullmatch(name["pattern"], "grafana")
+        for bad in ("169.254.169.254#", "a.b", "A", "-a", "a/b"):
+            assert not re.fullmatch(name["pattern"], bad)
+
+    @requires_helm
+    def test_pin_secret_ref_is_in_the_schema(self):
+        crd = next(
+            d
+            for d in _render("credential.value=hle_x")
+            if d.get("kind") == "CustomResourceDefinition"
+        )
+        spec = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+        ref = spec["properties"]["accessControl"]["properties"]["pinSecretRef"]
+        assert ref["required"] == ["name"]
+        assert ref["properties"]["key"]["default"] == "pin"
 
 
 class TestSeparateLegacyAgent:
@@ -653,7 +728,8 @@ class TestUpgradeSafety:
         assert [d["metadata"]["name"] for d in docs if d["kind"] == "Deployment"] == [
             "test-release-hle-operator"
         ]
-        assert "securityContext" not in _deployment(docs, "-operator")["spec"]["template"]["spec"]
+        # Same workload, now hardened (see test_legacy_pod_is_hardened).
+        assert _deployment(docs, "-operator")["spec"]["template"]["spec"]["securityContext"]
 
 
 class TestHandoverGroup:
