@@ -26,6 +26,9 @@ uv run mypy --strict src/
 uv run pytest tests/ -v
 uv run pytest tests/ -k "test_parse_crd" -v
 
+# After changing dependencies: refresh the hashed lock the image installs from
+uv lock && uv export --frozen --no-dev --no-emit-project --format requirements-txt -o requirements.lock
+
 # Build container
 docker build -t hle-operator:dev .
 
