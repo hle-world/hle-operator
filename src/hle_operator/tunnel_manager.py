@@ -9,7 +9,39 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from hle_client.api import ApiClient, ApiClientConfig
+from hle_client.k8s_targets import KubernetesTargetGuard
 from hle_client.tunnel import Tunnel, TunnelConfig, TunnelFatalError
+from hle_common.agent_protocol import K8sServiceTarget
+
+
+class SpecError(ValueError):
+    """A legacy-mode manifest cannot become a tunnel; the message is safe for CR status."""
+
+
+class TargetRefused(SpecError):  # noqa: N818 — reads better as a noun at call sites
+    """The target guard refused the upstream (kube API, metadata, excluded namespace...)."""
+
+
+def _default_guard() -> KubernetesTargetGuard:
+    return KubernetesTargetGuard.from_env()
+
+
+def build_service_url(namespace: str, name: str, port: int | str, scheme: str) -> str:
+    """The in-cluster URL of a Service, validated field by field.
+
+    Every part is checked as a Kubernetes name, port and scheme before it is
+    joined, so no field can carry a host, a path or a fragment into the URL.
+    """
+    try:
+        target = K8sServiceTarget(
+            namespace=namespace,
+            name=name,
+            port=port,
+            scheme=scheme,  # type: ignore[arg-type]  # validated by K8sServiceTarget
+        )
+    except ValueError as exc:
+        raise SpecError(f"invalid service reference: {exc}") from exc
+    return f"{target.scheme}://{target.name}.{target.namespace}.svc:{target.port}"
 
 
 @dataclass
@@ -50,10 +82,12 @@ class ManagedTunnel:
         spec: ManagedTunnelSpec,
         api_key: str,
         logger: logging.Logger,
+        guard: KubernetesTargetGuard | None = None,
     ) -> None:
         self._spec = spec
         self._api_key = api_key
         self._logger = logger
+        self._guard = guard
         self._tunnel: Tunnel | None = None
         self._task: asyncio.Task[None] | None = None
         self._subdomain: str | None = None
@@ -76,6 +110,12 @@ class ManagedTunnel:
         """Start the tunnel connection in a background task."""
         if self._task and not self._task.done():
             return
+
+        # The same refusals agent mode applies: the Kubernetes API, cloud
+        # metadata, node addresses, loopback and excluded namespaces.
+        decision = await (self._guard or _default_guard()).check(self._spec.service_url)
+        if not decision.allowed:
+            raise TargetRefused(f"target refused: {decision.reason}")
 
         self._stopped = False
         self._connected.clear()
@@ -260,15 +300,30 @@ class ManagedTunnel:
                 self._logger.exception("Failed to remove basic auth")
 
 
-def parse_crd_spec(spec: dict[str, Any]) -> ManagedTunnelSpec:
-    """Parse an HLETunnel CRD spec into a ManagedTunnelSpec."""
-    service_ref = spec.get("serviceRef", {})
+def parse_crd_spec(
+    spec: dict[str, Any],
+    namespace: str = "default",
+    *,
+    allow_cross_namespace: bool = False,
+) -> ManagedTunnelSpec:
+    """Parse an HLETunnel CRD spec into a ManagedTunnelSpec.
+
+    ``namespace`` is the HLETunnel's own. A ``serviceRef.namespace`` naming
+    another namespace is refused unless ``allow_cross_namespace`` is set.
+    Raises :class:`SpecError`.
+    """
+    service_ref = spec.get("serviceRef") or {}
     svc_name = service_ref.get("name", "")
-    svc_namespace = service_ref.get("namespace", "default")
+    svc_namespace = service_ref.get("namespace") or namespace
+    if svc_namespace != namespace and not allow_cross_namespace:
+        raise SpecError(
+            f"serviceRef.namespace {svc_namespace!r} differs from the HLETunnel namespace "
+            f"{namespace!r}; cross-namespace references are disabled"
+        )
     svc_port = service_ref.get("port", 80)
     svc_protocol = service_ref.get("protocol", "http")
 
-    service_url = f"{svc_protocol}://{svc_name}.{svc_namespace}.svc:{svc_port}"
+    service_url = build_service_url(svc_namespace, svc_name, svc_port, svc_protocol)
 
     ac_spec = spec.get("accessControl", {})
     allowed_users = [

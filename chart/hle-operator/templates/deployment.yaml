@@ -49,6 +49,9 @@ spec:
       # The process loads Kubernetes config and starts kopf in every agent-mode
       # run (even with gitops off), so it always needs the projected token.
       automountServiceAccountToken: true
+      {{- end }}
+      # Hardened in both modes. Legacy mode is the one that can read Secrets, so
+      # it is the one that least deserves a root, writable container.
       securityContext:
         runAsNonRoot: true
         # Numeric: the image's `hleop` user is uid 1001, and runAsNonRoot
@@ -57,7 +60,6 @@ spec:
         runAsGroup: 1001
         seccompProfile:
           type: RuntimeDefault
-      {{- end }}
       containers:
         - name: operator
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -78,6 +80,16 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            # An HLETunnel may only name a Service in its own namespace unless
+            # this is turned on.
+            - name: HLE_ALLOW_CROSS_NAMESPACE
+              value: {{ .Values.gitops.allowCrossNamespace | quote }}
+            {{- if not $agent }}
+            # The root filesystem is read-only; keep anything the client writes
+            # under the home directory on the tmp volume.
+            - name: HOME
+              value: /tmp
+            {{- end }}
             {{- if $agent }}
             - name: HLE_GITOPS
               value: {{ ternary "true" "false" (not (empty (include "hle-operator.gitops" .))) | quote }}
@@ -148,32 +160,30 @@ spec:
               port: health
             initialDelaySeconds: 10
             periodSeconds: 30
-          {{- if $agent }}
           volumeMounts:
+            {{- if $agent }}
             # Enrollment and readiness state. Losing it costs a reconnect, not
             # a re-enrollment, so it does not need a PVC.
             - name: data
               mountPath: /data
+            {{- end }}
             # The root filesystem is read-only; Python and kopf want a tmp.
             - name: tmp
               mountPath: /tmp
-          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          {{- if $agent }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-          {{- end }}
-      {{- if $agent }}
       volumes:
+        {{- if $agent }}
         - name: data
           emptyDir: {}
+        {{- end }}
         - name: tmp
           emptyDir: {}
-      {{- end }}
       {{- /* An upgrade from the separate agent keeps its placement values. */}}
       {{- with (or .Values.nodeSelector (and $agent .Values.agent.nodeSelector)) }}
       nodeSelector:

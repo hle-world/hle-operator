@@ -21,6 +21,7 @@ import kopf
 from hle_operator.config import (
     OperatorConfig,
     OperatorMode,
+    allow_cross_namespace,
     load_config,
     load_operator_config,
 )
@@ -114,7 +115,11 @@ async def _run_agent(cfg: OperatorConfig) -> int:
         spec_resolver=lambda spec: holder["registry"].resolve_spec(spec),
     )
     # Listed exactly as kopf watches: the same namespaces or the whole cluster.
-    registry = DeclarationRegistry(client, lister=KubernetesLister(cfg.namespaces))
+    registry = DeclarationRegistry(
+        client,
+        lister=KubernetesLister(cfg.namespaces),
+        allow_cross_namespace=allow_cross_namespace(),
+    )
     holder["registry"] = registry
 
     stop = asyncio.Event()

@@ -60,7 +60,7 @@ class TestParseCrdSpec:
                 "pin": "9876",
             },
         }
-        result = parse_crd_spec(spec)
+        result = parse_crd_spec(spec, allow_cross_namespace=True)
         assert result.service_url == "https://argocd.argocd.svc:8080"
         assert result.label == "argocd"
         assert result.auth_mode == "none"

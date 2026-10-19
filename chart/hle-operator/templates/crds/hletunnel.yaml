@@ -59,10 +59,15 @@ spec:
                   properties:
                     name:
                       type: string
-                      description: Service name.
+                      description: Service name (a DNS-1035 label).
+                      pattern: "^[a-z]([-a-z0-9]*[a-z0-9])?$"
+                      maxLength: 63
                     namespace:
                       type: string
-                      description: Service namespace. Defaults to the HLETunnel namespace.
+                      description: >
+                        Service namespace. Defaults to, and must equal, the HLETunnel namespace
+                        unless the operator runs with gitops.allowCrossNamespace=true; a
+                        different namespace is otherwise refused with phase Failed.
                     port:
                       type: integer
                       description: Service port number.
@@ -139,8 +144,25 @@ spec:
                             default: "any"
                     pin:
                       type: string
-                      description: PIN code (4-8 digits) required to access the tunnel.
+                      description: >
+                        PIN code (4-8 digits) required to access the tunnel. Visible to
+                        everyone who can read this object; prefer pinSecretRef.
                       pattern: "^[0-9]{4,8}$"
+                    pinSecretRef:
+                      type: object
+                      description: >
+                        Reference to a Secret (in this namespace) holding the PIN, so it
+                        is not readable from the HLETunnel. Mutually exclusive with pin.
+                      required:
+                        - name
+                      properties:
+                        name:
+                          type: string
+                          description: Name of the Secret.
+                        key:
+                          type: string
+                          description: Key within the Secret.
+                          default: "pin"
                     basicAuth:
                       type: object
                       description: Basic Auth credentials for the tunnel endpoint.
@@ -158,8 +180,10 @@ spec:
                 apiKeyRef:
                   type: object
                   description: >
-                    Override the global API key with a per-tunnel key from a Secret.
-                    If not set, the operator's global API key is used.
+                    Legacy mode only (deprecated): override the global API key with a
+                    per-tunnel key from a Secret. Agent mode, the default, declares every
+                    tunnel under the operator's own credential and marks an HLETunnel that
+                    sets this field Failed rather than ignoring it.
                   properties:
                     name:
                       type: string

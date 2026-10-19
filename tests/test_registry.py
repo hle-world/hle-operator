@@ -331,8 +331,8 @@ async def test_strip_failure_is_swallowed():
 
 async def test_resolve_spec_fills_upstream_basic_auth_from_cache_only():
     h = Harness()
-    h.secrets["sec/api#password"] = "u:p"
-    await h.registry.apply_crd(crd_body(upstreamBasicAuthSecret="sec/api#password"))
+    h.secrets["monitoring/api#password"] = "u:p"
+    await h.registry.apply_crd(crd_body(upstreamBasicAuthSecret="monitoring/api#password"))
     reads = h.secret_reads
 
     spec = EndpointSpec(id=1, label="grafana", service_url="http://grafana:3000")
@@ -345,21 +345,21 @@ async def test_resolve_spec_fills_upstream_basic_auth_from_cache_only():
 
 async def test_resolve_spec_missing_secret_raises_value_error_without_value():
     h = Harness()
-    await h.registry.apply_crd(crd_body(upstreamBasicAuthSecret="sec/api#password"))
+    await h.registry.apply_crd(crd_body(upstreamBasicAuthSecret="monitoring/api#password"))
     spec = EndpointSpec(id=1, label="grafana", service_url="http://grafana:3000")
-    with pytest.raises(ValueError, match="sec/api#password"):
+    with pytest.raises(ValueError, match="monitoring/api#password"):
         h.registry.resolve_spec(spec)
 
 
 async def test_upstream_rotation_forces_frame_even_with_identical_set():
     h = Harness()
-    h.secrets["sec/api#password"] = "u:one"
-    h.registry._lister.crds = [crd_body(upstreamBasicAuthSecret="sec/api#password")]
+    h.secrets["monitoring/api#password"] = "u:one"
+    h.registry._lister.crds = [crd_body(upstreamBasicAuthSecret="monitoring/api#password")]
     await ready(h)
     sent = len(h.client.sent)
     assert await h.registry.poll_secrets_once() is False  # unchanged
     assert len(h.client.sent) == sent
-    h.secrets["sec/api#password"] = "u:two"
+    h.secrets["monitoring/api#password"] = "u:two"
     assert await h.registry.poll_secrets_once() is True
     assert len(h.client.sent) == sent + 1
     assert h.client.sent[-1][0] == h.client.sent[-2][0]  # same set, new revision

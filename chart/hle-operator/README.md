@@ -34,8 +34,9 @@ credential. `agent` and `legacy` force the choice.
 | `mode` | `""` (auto) | `agent` or `legacy`; empty auto-detects. |
 | `credential.value` / `credential.existingSecret` | `""` | The single HLE credential, inline or from an existing Secret. Agent mode: tunnel-scoped `hle_` key. Legacy mode: full-account API key. |
 | `gitops.enabled` | `true` | Run the CRD/Ingress reconciler on top of the agent. Declared tunnels show read-only in the dashboard. |
-| `gitops.secretResourceNames` | `[]` | Secret names the agent may `get` for visitor basic auth. get-only. |
-| `gitops.clusterWideSecretGet` | `false` | Cluster-wide Secret `get` for basic-auth Secrets whose names are unknown ahead of time. Widest grant; prefer `secretResourceNames`. |
+| `gitops.secretResourceNames` | `[]` | Secret names the operator may `get` (visitor basic auth, PIN Secrets; legacy mode also `apiKeyRef`). get-only, both modes. |
+| `gitops.clusterWideSecretGet` | `false` | Cluster-wide Secret `get` for Secrets whose names are unknown ahead of time. Widest grant; prefer `secretResourceNames`. Both modes: **legacy mode no longer holds it by default**. |
+| `gitops.allowCrossNamespace` | `false` | Let `HLETunnel.spec.serviceRef.namespace` name another namespace. Off: such an HLETunnel ends `Failed`. Passed as `HLE_ALLOW_CROSS_NAMESPACE`. |
 | `scope.namespaces` | `[]` | Namespaces the agent may see/expose. Empty is cluster-wide; set uses per-namespace Roles. |
 | `handover.enabled` | `true` | Zero-drop `RollingUpdate` (maxSurge=1, maxUnavailable=0): the relay hands tunnels over to the new pod (needs relay and hle-client 2610.1+). `false` uses `Recreate`. |
 | `allowRawUrls` | `false` | Allow raw URLs as targets. Services only by default; the kube API, metadata, node IPs and loopback are always refused. |
@@ -47,7 +48,7 @@ credential. `agent` and `legacy` force the choice.
 | `agent.enabled` | `false` | **Deprecated** separate headless agent; renders only in legacy mode. |
 | `agent.discovery.enabled` | `true` | Read-only Services/Endpoints discovery. Off drops the grant and the env. |
 | `agent.discovery.excludeNamespaces` | `[kube-system, kube-public, kube-node-lease]` | Namespaces the agent never reports. |
-| `agent.discovery.excludeLabel` | `hle.world/expose=denied` | Namespaces carrying this label are skipped. |
+| `agent.discovery.excludeLabel` | `hle.world/expose=denied` | Passed to the agent as `HLE_DISCOVERY_EXCLUDE_LABEL`. **Not enforced yet**: hle-client does not read it. Use `excludeNamespaces` or `scope.namespaces`. |
 | `agent.firepuncher.enabled` | `false` | Allow `hle forward <agent>` through this agent. Off for cluster agents. |
 | `agent.env` | `[]` | Extra environment for the agent container. |
 
