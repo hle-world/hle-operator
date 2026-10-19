@@ -114,7 +114,13 @@ network:
   read.
 - **Legacy mode** validates the Service name, port and scheme, and runs the same
   target guard as the agent (Kubernetes API, cloud metadata, node addresses and
-  excluded namespaces are refused). Legacy mode is deprecated.
+  excluded namespaces are refused). The address the guard approves is the one
+  dialled, and it is re-checked every minute: a target that becomes refused
+  stops the tunnel, and a Service that moves is redialled. An update that
+  cannot be applied (an unreadable Secret, a refused target) stops the running
+  tunnel instead of leaving it on its old settings. Legacy mode is deprecated.
+- A PIN Secret that is deleted makes the tunnel fail closed on the next Secret
+  poll (about a minute); a transient API error keeps the last PIN.
 
 ## Features
 
