@@ -15,6 +15,7 @@ from hle_operator.config import allow_cross_namespace, get_api_key, load_api_key
 from hle_operator.tunnel_manager import (
     ManagedTunnel,
     ManagedTunnelSpec,
+    RefusedCallback,
     SpecError,
     build_service_url,
     parse_crd_spec,
@@ -110,7 +111,12 @@ async def on_tunnel_create(
         patch.status["message"] = "No HLE API key configured"
         return {"phase": "Failed"}
 
-    tunnel = ManagedTunnel(spec=managed_spec, api_key=api_key, logger=logger)
+    tunnel = ManagedTunnel(
+        spec=managed_spec,
+        api_key=api_key,
+        logger=logger,
+        on_refused=_crd_refused(ns, name, key),
+    )
     _tunnels[key] = tunnel
 
     patch.status["phase"] = "Pending"
@@ -238,17 +244,6 @@ async def reconcile_access(
     if not tunnel or not tunnel.is_connected:
         return
 
-    # The upstream address is pinned at start; look again so a refused target
-    # stops the tunnel and a moved Service is redialled.
-    try:
-        await tunnel.recheck_target()
-    except SpecError as exc:
-        _tunnels.pop(key, None)
-        patch.status["phase"] = "Failed"
-        patch.status["message"] = str(exc)
-        logger.error("HLETunnel %s refused: %s", key, exc)
-        return
-
     sync_policy = spec.get("syncPolicy", "strict")
     if sync_policy != "strict":
         return
@@ -333,7 +328,12 @@ async def on_ingress_create(
         logger.error("No HLE API key — cannot create tunnel for Ingress %s", name)
         return {"phase": "Failed"}
 
-    tunnel = ManagedTunnel(spec=managed_spec, api_key=api_key, logger=logger)
+    tunnel = ManagedTunnel(
+        spec=managed_spec,
+        api_key=api_key,
+        logger=logger,
+        on_refused=_ingress_refused(body, key),
+    )
     _ingress_tunnels[key] = tunnel
     try:
         await tunnel.start()
@@ -402,6 +402,42 @@ async def on_ingress_delete(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _crd_refused(namespace: str, name: str, key: str) -> RefusedCallback:
+    """Report a running HLETunnel whose target became refused: drop it, status Failed."""
+
+    async def report(tunnel: ManagedTunnel, message: str) -> None:
+        if _tunnels.get(key) is tunnel:
+            _tunnels.pop(key, None)
+        await asyncio.to_thread(
+            _patch_crd_status, namespace, name, {"phase": "Failed", "message": message}
+        )
+
+    return report
+
+
+def _ingress_refused(body: Any, key: str) -> RefusedCallback:
+    """Same for an Ingress: drop it and surface the reason as an Event."""
+
+    async def report(tunnel: ManagedTunnel, message: str) -> None:
+        if _ingress_tunnels.get(key) is tunnel:
+            _ingress_tunnels.pop(key, None)
+        try:
+            kopf.warn(body, reason="TargetRefused", message=message)
+        except Exception:  # noqa: BLE001 — the log line is the fallback
+            logger.error("Ingress %s refused: %s", key, message)
+
+    return report
+
+
+def _patch_crd_status(namespace: str, name: str, status: dict[str, str]) -> None:
+    try:
+        kubernetes.client.CustomObjectsApi().patch_namespaced_custom_object_status(
+            "hle.world", "v1alpha1", namespace, "hletunnels", name, {"status": status}
+        )
+    except kubernetes.client.ApiException:
+        logger.exception("Could not patch status of HLETunnel %s/%s", namespace, name)
 
 
 def _require_basic_auth(secret_name: str, namespace: str) -> tuple[str, str]:

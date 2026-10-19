@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -75,6 +76,14 @@ class ManagedTunnelSpec:
     apex: bool = False
 
 
+# How often a running tunnel re-runs the target guard (CRD and Ingress alike).
+RECHECK_INTERVAL = 60.0
+
+# Called as ``on_refused(tunnel, message)`` after a running tunnel was stopped
+# because its target is no longer allowed.
+RefusedCallback = Callable[["ManagedTunnel", str], Awaitable[None]]
+
+
 class ManagedTunnel:
     """Manages a single HLE tunnel with access control reconciliation."""
 
@@ -84,7 +93,12 @@ class ManagedTunnel:
         api_key: str,
         logger: logging.Logger,
         guard: KubernetesTargetGuard | None = None,
+        on_refused: RefusedCallback | None = None,
+        recheck_interval: float = RECHECK_INTERVAL,
     ) -> None:
+        self._on_refused = on_refused
+        self._recheck_interval = recheck_interval
+        self._recheck_task: asyncio.Task[None] | None = None
         self._spec = spec
         self._api_key = api_key
         self._logger = logger
@@ -109,6 +123,15 @@ class ManagedTunnel:
         return self._tunnel is not None and self._tunnel.is_connected
 
     async def start(self) -> None:
+        """Start the tunnel and the periodic target recheck.
+
+        Raises :class:`TargetRefused` when the guard refuses the target.
+        """
+        await self._start_connection()
+        if self._recheck_task is None or self._recheck_task.done():
+            self._recheck_task = asyncio.create_task(self._recheck_loop())
+
+    async def _start_connection(self) -> None:
         """Start the tunnel connection in a background task."""
         if self._task and not self._task.done():
             return
@@ -170,8 +193,8 @@ class ManagedTunnel:
 
         The address is pinned at start, so a Service recreated with a new
         ClusterIP would otherwise stay unreachable until the next spec change.
-        Raises :class:`TargetRefused` (after stopping) when the target is no
-        longer allowed.
+        Raises :class:`TargetRefused` (after stopping the connection) when the
+        target is no longer allowed.
         """
         if self._stopped or self._tunnel is None:
             return
@@ -179,15 +202,42 @@ class ManagedTunnel:
         try:
             await self._approved_target()
         except TargetRefused:
-            await self.stop()
+            await self._stop_connection()
             raise
         if self._pinned_address != previous:
             self._logger.info("Upstream address changed; reconnecting")
-            await self.stop()
-            await self.start()
+            await self._stop_connection()
+            await self._start_connection()
+
+    async def _recheck_loop(self) -> None:
+        """One loop per tunnel, whatever created it (HLETunnel or Ingress)."""
+        while True:
+            await asyncio.sleep(self._recheck_interval)
+            try:
+                await self.recheck_target()
+            except TargetRefused as exc:
+                self._logger.error("Tunnel %s stopped: %s", self._spec.label, exc)
+                if self._on_refused is not None:
+                    try:
+                        await self._on_refused(self, str(exc))
+                    except Exception:
+                        self._logger.exception("Reporting a refused target failed")
+                return
+            except Exception:
+                # A DNS or API blip must not end the loop; try again next round.
+                self._logger.exception("Target recheck failed; retrying")
 
     async def stop(self) -> None:
-        """Stop the tunnel and cancel the background task."""
+        """Stop the tunnel, its recheck loop and the background task."""
+        recheck = self._recheck_task
+        self._recheck_task = None
+        if recheck is not None and recheck is not asyncio.current_task() and not recheck.done():
+            recheck.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await recheck
+        await self._stop_connection()
+
+    async def _stop_connection(self) -> None:
         self._stopped = True
         if self._tunnel:
             await self._tunnel.disconnect()

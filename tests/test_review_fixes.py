@@ -145,25 +145,6 @@ class TestRefusedUpdateStopsTunnel:
         finally:
             handlers._tunnels.pop("team-a/x", None)
 
-    async def test_timer_recheck_refusal_drops_the_tunnel(self):
-        running = MagicMock()
-        running.is_connected = True
-        running.recheck_target = AsyncMock(side_effect=TargetRefused("target refused: x"))
-        handlers._tunnels["team-a/x"] = running
-        patch_obj = SimpleNamespace(status={})
-        try:
-            await handlers.reconcile_access(
-                spec={"syncPolicy": "strict"},
-                name="x",
-                namespace="team-a",
-                patch=patch_obj,
-                logger=MagicMock(),
-            )
-            assert patch_obj.status["phase"] == "Failed"
-            assert "team-a/x" not in handlers._tunnels
-        finally:
-            handlers._tunnels.pop("team-a/x", None)
-
 
 class TestDeletedPinSecret:
     async def started_with_pin(self) -> Harness:
