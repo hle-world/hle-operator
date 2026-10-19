@@ -7,9 +7,10 @@ import contextlib
 import logging
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from hle_client.api import ApiClient, ApiClientConfig
-from hle_client.k8s_targets import KubernetesTargetGuard
+from hle_client.k8s_targets import KubernetesTargetGuard, authority_of
 from hle_client.tunnel import Tunnel, TunnelConfig, TunnelFatalError
 from hle_common.agent_protocol import K8sServiceTarget
 
@@ -88,6 +89,7 @@ class ManagedTunnel:
         self._api_key = api_key
         self._logger = logger
         self._guard = guard
+        self._pinned_address: str | None = None
         self._tunnel: Tunnel | None = None
         self._task: asyncio.Task[None] | None = None
         self._subdomain: str | None = None
@@ -113,15 +115,21 @@ class ManagedTunnel:
 
         # The same refusals agent mode applies: the Kubernetes API, cloud
         # metadata, node addresses, loopback and excluded namespaces.
-        decision = await (self._guard or _default_guard()).check(self._spec.service_url)
-        if not decision.allowed:
-            raise TargetRefused(f"target refused: {decision.reason}")
+        #
+        # The Tunnel dials the upstream itself and has no per-dial hook, so the
+        # address the guard approved is what gets dialled: the URL carries the
+        # approved IP and the original authority travels as the Host header and
+        # TLS server name. A second DNS answer cannot redirect it (rebinding).
+        connect_url, upstream_host = await self._approved_target()
 
         self._stopped = False
         self._connected.clear()
 
         config = TunnelConfig(
-            service_url=self._spec.service_url,
+            service_url=connect_url,
+            upstream_host=upstream_host,
+            # Never route an in-cluster target through an environment proxy.
+            trust_env=False,
             api_key=self._api_key,
             service_label=self._spec.label,
             auth_mode=self._spec.auth_mode,
@@ -138,6 +146,45 @@ class ManagedTunnel:
             on_registered=self._on_registered,
         )
         self._task = asyncio.create_task(self._run())
+
+    async def _approved_target(self) -> tuple[str, str | None]:
+        """Run the guard; return the URL to dial and the upstream Host/SNI authority."""
+        decision = await (self._guard or _default_guard()).check(self._spec.service_url)
+        if not decision.allowed:
+            raise TargetRefused(f"target refused: {decision.reason}")
+        self._pinned_address = decision.address
+        if decision.address:
+            host = f"[{decision.address}]" if ":" in decision.address else decision.address
+            parsed = urlparse(self._spec.service_url)
+            port = f":{parsed.port}" if parsed.port else ""
+            return (
+                urlunparse(parsed._replace(netloc=f"{host}{port}")),
+                authority_of(self._spec.service_url),
+            )
+        if decision.url and decision.url != self._spec.service_url:
+            return decision.url, authority_of(self._spec.service_url)
+        return self._spec.service_url, None
+
+    async def recheck_target(self) -> None:
+        """Re-run the guard; stop the tunnel if refused, redial if the address moved.
+
+        The address is pinned at start, so a Service recreated with a new
+        ClusterIP would otherwise stay unreachable until the next spec change.
+        Raises :class:`TargetRefused` (after stopping) when the target is no
+        longer allowed.
+        """
+        if self._stopped or self._tunnel is None:
+            return
+        previous = self._pinned_address
+        try:
+            await self._approved_target()
+        except TargetRefused:
+            await self.stop()
+            raise
+        if self._pinned_address != previous:
+            self._logger.info("Upstream address changed; reconnecting")
+            await self.stop()
+            await self.start()
 
     async def stop(self) -> None:
         """Stop the tunnel and cancel the background task."""

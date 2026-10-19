@@ -267,7 +267,7 @@ class TestLegacyServiceUrl:
 def _guard(allowed: bool, reason: str | None = None):
     guard = MagicMock()
     guard.check = AsyncMock(
-        return_value=SimpleNamespace(allowed=allowed, reason=reason, url="http://x")
+        return_value=SimpleNamespace(allowed=allowed, reason=reason, url="http://x", address=None)
     )
     return guard
 

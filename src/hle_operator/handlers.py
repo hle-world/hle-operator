@@ -172,6 +172,10 @@ async def on_tunnel_update(
             )
             _resolve_basic_auth(managed_spec, spec, ns)
         except SpecError as exc:
+            # A refused update must not leave the tunnel running on its old
+            # access control: stop it and forget it.
+            _tunnels.pop(key, None)
+            await existing.stop()
             patch.status["phase"] = "Failed"
             patch.status["message"] = str(exc)
             logger.error("HLETunnel %s refused: %s", key, exc)
@@ -232,6 +236,17 @@ async def reconcile_access(
     tunnel = _tunnels.get(key)
 
     if not tunnel or not tunnel.is_connected:
+        return
+
+    # The upstream address is pinned at start; look again so a refused target
+    # stops the tunnel and a moved Service is redialled.
+    try:
+        await tunnel.recheck_target()
+    except SpecError as exc:
+        _tunnels.pop(key, None)
+        patch.status["phase"] = "Failed"
+        patch.status["message"] = str(exc)
+        logger.error("HLETunnel %s refused: %s", key, exc)
         return
 
     sync_policy = spec.get("syncPolicy", "strict")

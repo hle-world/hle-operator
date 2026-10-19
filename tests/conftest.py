@@ -11,7 +11,7 @@ class AllowAllGuard:
     """Stands in for KubernetesTargetGuard: no DNS in unit tests."""
 
     async def check(self, service_url: str):
-        return SimpleNamespace(allowed=True, reason=None, url=service_url)
+        return SimpleNamespace(allowed=True, reason=None, url=service_url, address=None)
 
 
 @pytest.fixture(autouse=True)

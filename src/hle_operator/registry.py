@@ -802,6 +802,21 @@ class DeclarationRegistry:
             logger.warning("Could not read upstream Secret %s", ref)
             return None
 
+    async def _fetch_pin(self, ref: str) -> tuple[str | None, bool]:
+        """``(value, gone)``: gone means the Secret or key definitely does not exist.
+
+        Any other failure is transient: ``(None, False)``, so the caller keeps
+        what it had.
+        """
+        try:
+            value = await asyncio.to_thread(self._read_secret, ref)
+        except Exception as exc:  # noqa: BLE001 — the value is never logged
+            if _is_not_found(exc) or isinstance(exc, KeyError):
+                return None, True
+            logger.warning("Could not read PIN Secret %s", ref.split("#", 1)[0])
+            return None, False
+        return (value, False) if value else (None, True)
+
     def _referenced(self) -> tuple[set[VisitorRef], set[str], set[str]]:
         visitors: set[VisitorRef] = set()
         upstreams: set[str] = set()
@@ -864,14 +879,21 @@ class DeclarationRegistry:
                 visitor_changed = True
             self._visitor_cache[ref] = value
         # A rotated PIN re-declares, like a rotated visitor password.
+        # A deleted PIN Secret (or key) fails the tunnel closed, like a deleted
+        # visitor Secret; a transient API error keeps the last value.
         for pin in pins:
             last_pin = self._pin_cache.get(pin)
-            fetched_pin = await self._fetch_upstream(pin)
-            if fetched_pin is not None and fetched_pin != last_pin:
-                visitor_changed = True
-                self._pin_cache[pin] = fetched_pin
+            fetched_pin, gone = await self._fetch_pin(pin)
+            if fetched_pin is not None:
+                if fetched_pin != last_pin:
+                    visitor_changed = True
+                    self._pin_cache[pin] = fetched_pin
+            elif gone:
+                if last_pin is not None:
+                    visitor_changed = True
+                self._pin_cache[pin] = None
             elif pin not in self._pin_cache:
-                self._pin_cache[pin] = None  # still unreadable; retried next poll
+                self._pin_cache[pin] = None  # unreadable so far; retried next poll
         upstream_changed = False
         for key in upstreams:
             value = await self._fetch_upstream(key)
