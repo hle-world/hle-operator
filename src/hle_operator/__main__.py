@@ -130,7 +130,8 @@ async def _run_agent(cfg: OperatorConfig) -> int:
     # implicitly), so add the same one: the kubernetes client's config.
     kopf_registry = kopf.OperatorRegistry()
     kopf.on.login(registry=kopf_registry)(kopf.login_via_client)
-    aux: list[asyncio.Task[None]] = [asyncio.create_task(StatusPublisher(client, registry).run())]
+    publisher = StatusPublisher(client, registry)
+    aux: list[asyncio.Task[None]] = [asyncio.create_task(publisher.run())]
     if cfg.gitops:
         from hle_operator import agent_handlers
 
@@ -168,6 +169,9 @@ async def _run_agent(cfg: OperatorConfig) -> int:
     # agent. kopf's own SIGTERM handling ends kopf_task, so a signal arrives
     # here as "kopf finished".
     stop.set()
+    # Before the drain: a terminating pod must not write Disconnected while
+    # another replica already owns the tunnel.
+    publisher.stop()
     registry.close()
     with contextlib.suppress(Exception):
         await asyncio.wait_for(client.stop(), timeout=STOP_TIMEOUT)

@@ -104,6 +104,9 @@ class DeclarationTarget:
     error: str | None = None
     # metadata.uid, so a recreated object of the same name gets fresh status.
     uid: str = ""
+    # .status.phase as the watch last saw it, so the status loop can tell when
+    # another writer (a terminating replica) overwrote the phase it wrote.
+    stored_phase: str = ""
 
 
 @dataclass
@@ -519,14 +522,35 @@ class DeclarationRegistry:
         """Declared endpoints plus the ones that could not be, for status."""
         endpoints, errors = self._effective()
         out = [
-            DeclarationTarget(source_ref=ref, endpoint=endpoint, uid=self._uid(ref))
+            DeclarationTarget(
+                source_ref=ref,
+                endpoint=endpoint,
+                uid=self._uid(ref),
+                stored_phase=self._stored_phase(ref),
+            )
             for ref, endpoint in endpoints.items()
         ]
         out += [
-            DeclarationTarget(source_ref=ref, error=message, uid=self._uid(ref))
+            DeclarationTarget(
+                source_ref=ref,
+                error=message,
+                uid=self._uid(ref),
+                stored_phase=self._stored_phase(ref),
+            )
             for ref, message in errors.items()
         ]
         return sorted(out, key=lambda t: t.source_ref)
+
+    def _stored_phase(self, source_ref: str) -> str:
+        """``.status.phase`` of the stored body, as the watch last saw it.
+
+        Only CRDs carry a phase; an Ingress status has none, so this is "".
+        """
+        source = self._sources.get(source_ref)
+        if source is None:
+            return ""
+        status = source.body.get("status") or {}
+        return str(status.get("phase") or "")
 
     def _uid(self, source_ref: str) -> str:
         source = self._sources.get(source_ref)
