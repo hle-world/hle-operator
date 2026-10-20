@@ -6,6 +6,12 @@ pass every ten seconds reads ``AgentClient.endpoint_statuses()`` (which is
 ``declared_ack``, computes a phase, and patches only what changed. A failed
 patch is retried with a per-object backoff, and state for objects that left
 the registry is dropped, so neither a broken API nor churn grows anything.
+
+A pod that is shutting down must not write ``Disconnected``: during a rollout
+the terminating replica is draining while a newer one already owns the tunnel,
+and its last write would otherwise win. ``stop()`` puts the loop off duty, and
+even so a pass re-asserts a ``Connected`` phase another writer stored over it,
+so a stale ``Disconnected`` heals on the next tick.
 """
 
 from __future__ import annotations
@@ -101,9 +107,16 @@ class StatusPublisher:
         # source_ref -> (uid, last status written). Bounded by the registry.
         self._last: dict[str, tuple[str, dict[str, str]]] = {}
         self._retry: dict[str, _Retry] = {}
+        # Set once the pod starts shutting down: a draining replica never writes
+        # status, so it cannot overwrite the replica taking the tunnel over.
+        self._stopping = False
+
+    def stop(self) -> None:
+        """Take the loop off duty; a shutting-down pod writes no status."""
+        self._stopping = True
 
     async def run(self) -> None:
-        while True:
+        while not self._stopping:
             await asyncio.sleep(self._interval)
             try:
                 await self.publish_once()
@@ -111,6 +124,8 @@ class StatusPublisher:
                 logger.exception("Status publish failed")
 
     async def publish_once(self) -> None:
+        if self._stopping:
+            return
         statuses = self._client.endpoint_statuses()
         if statuses is None:
             return
@@ -126,7 +141,7 @@ class StatusPublisher:
         for target in targets:
             computed = self._compute(target, by_label)
             last = self._last.get(target.source_ref)
-            if last == (target.uid, computed):
+            if last == (target.uid, computed) and not self._stale(target, computed):
                 self._retry.pop(target.source_ref, None)
                 continue
             retry = self._retry.get(target.source_ref)
@@ -138,6 +153,16 @@ class StatusPublisher:
             else:
                 delay = min(MAX_BACKOFF, retry.delay * 2) if retry else self._interval
                 self._retry[target.source_ref] = _Retry(at=now + delay, delay=delay)
+
+    @staticmethod
+    def _stale(target: DeclarationTarget, computed: Mapping[str, str]) -> bool:
+        """True when the cluster stored a phase that disagrees with *computed*.
+
+        This is how a stale writer heals: once the watch sees a phase other
+        than ours (for example a terminating pod wrote ``Disconnected`` over a
+        working ``Connected``), the next pass re-asserts ours.
+        """
+        return bool(target.stored_phase) and target.stored_phase != computed["phase"]
 
     def _compute(
         self,

@@ -152,6 +152,40 @@ async def test_not_connected_is_disconnected():
     assert phase(patcher)["phase"] == "Disconnected"
 
 
+async def test_shutdown_does_not_overwrite_a_newer_connected():
+    publisher, client, _, patcher, _ = await build()
+    client.statuses = [
+        EndpointStatus(label="grafana", connected=True, public_url="https://grafana-x7k.hle.world")
+    ]
+    await publisher.publish_once()
+    assert phase(patcher)["phase"] == "Connected"
+    # The pod starts draining while the next replica already owns the tunnel;
+    # its closing view of the endpoint must not clobber the newer Connected.
+    publisher.stop()
+    client.statuses = [EndpointStatus(label="grafana", connected=False)]
+    await publisher.publish_once()
+    assert len(patcher.calls) == 1
+    assert phase(patcher)["phase"] == "Connected"
+
+
+async def test_resync_corrects_a_stale_disconnected():
+    publisher, client, registry, patcher, _ = await build()
+    client.statuses = [
+        EndpointStatus(label="grafana", connected=True, public_url="https://grafana-x7k.hle.world")
+    ]
+    await publisher.publish_once()
+    assert len(patcher.calls) == 1
+    # A terminating replica wrote Disconnected after us; the watch sees it.
+    await registry.apply_crd({**CRD, "status": {"phase": "Disconnected"}}, schedule=False)
+    await publisher.publish_once()
+    assert len(patcher.calls) == 2
+    assert phase(patcher)["phase"] == "Connected"
+    # Once the watch carries our own phase again there is nothing left to fix.
+    await registry.apply_crd({**CRD, "status": {"phase": "Connected"}}, schedule=False)
+    await publisher.publish_once()
+    assert len(patcher.calls) == 2
+
+
 async def test_endpoint_error_is_failed():
     publisher, client, _, patcher, _ = await build()
     client.statuses = [
