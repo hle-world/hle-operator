@@ -1,6 +1,6 @@
 # The base image is pinned by digest (the multi-arch index, so amd64 and arm64
 # both resolve). Dependabot bumps it; do not replace it with a bare tag.
-FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
 
 RUN groupadd -g 1001 hleop && useradd -u 1001 -g hleop -m hleop
 
