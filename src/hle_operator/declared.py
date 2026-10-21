@@ -22,6 +22,10 @@ from hle_common.agent_protocol import (
 _LABEL_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 _LABEL_MAX = 63
 
+# Aliases are FQDNs, the same shape the relay accepts for a zone.
+_HOSTNAME_RE = re.compile(r"^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$")
+_HOSTNAME_MAX = 253
+
 CRD_KIND = "hletunnel"
 INGRESS_KIND = "ingress"
 INGRESS_CLASS = "hle"
@@ -128,6 +132,34 @@ def _zone_fields(zone: Any, apex: Any) -> dict[str, Any]:
     if apex_b and not zone_s:
         raise DeclarationError("apex requires zone")
     return {"zone": zone_s, "apex": apex_b}
+
+
+def _aliases_option(raw: Any) -> dict[str, str]:
+    """The ``options["aliases"]`` entry for a declaration, or {} when there are none.
+
+    Accepts a CRD list or a comma-separated annotation: entries are stripped,
+    lower-cased, have a trailing dot dropped and duplicates removed, keeping
+    order. Each must be an FQDN, the same shape the relay accepts for a zone.
+    """
+    if raw is None:
+        entries: list[Any] = []
+    elif isinstance(raw, str):
+        entries = raw.split(",")
+    else:
+        entries = list(raw)
+
+    aliases: list[str] = []
+    for entry in entries:
+        alias = str(entry).strip().lower().rstrip(".")
+        if not alias:
+            continue
+        if len(alias) > _HOSTNAME_MAX or not _HOSTNAME_RE.match(alias):
+            raise DeclarationError(
+                f"invalid alias {entry!r}: must be a hostname like app.example.com"
+            )
+        if alias not in aliases:
+            aliases.append(alias)
+    return {"aliases": ",".join(aliases)} if aliases else {}
 
 
 def _crd_target(
@@ -264,6 +296,7 @@ def crd_to_declared(
                 _pin(ac.get("pin"), crd_pin_secret_ref(body), pin_secret),
                 basic_auth,
             ),
+            options=_aliases_option(spec.get("aliases")),
             **_zone_fields(spec.get("zone"), spec.get("apex", False)),
         )
     except ValueError as exc:
@@ -328,6 +361,7 @@ def ingress_to_declared(
             sync_policy=annotations.get("hle.world/sync-policy", "strict"),
             source_ref=ingress_source_ref(body),
             access=access,
+            options=_aliases_option(annotations.get("hle.world/aliases")),
             **_zone_fields(
                 annotations.get("hle.world/zone"),
                 annotations.get("hle.world/apex", "false").lower() == "true",

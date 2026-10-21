@@ -262,6 +262,16 @@ Publish under one of your custom zones instead of the base domain:
 
 On an Ingress, use the annotations `hle.world/zone: zone.example` and `hle.world/apex: "true"`.
 
+### spec.aliases
+
+Extra hostnames for a tunnel, served in addition to its `<label>.<zone>` name:
+
+| Field | Type | Description |
+|---|---|---|
+| `aliases` | array of strings | Up to 10 FQDNs, e.g. `app.example.com`. Each must be on the base domain or a zone your account may publish on. A hostname the relay refuses is reported in `status.message`; the tunnel still publishes. |
+
+On an Ingress, use the comma-separated annotation `hle.world/aliases: "a.example.com,b.example.com"`.
+
 ### spec.syncPolicy
 
 - **`strict`** (default) — Operator continuously reconciles access control. Dashboard edits are overwritten every 60 seconds.
