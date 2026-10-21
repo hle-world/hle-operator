@@ -27,6 +27,15 @@ credential. `agent` and `legacy` force the choice.
 - **legacy** — the original apiKey operator, unchanged and **deprecated**.
   `replicaCount` is honoured.
 
+## Tunnels
+
+With `gitops.enabled` the chart installs the `HLETunnel` CRD and reconciles
+`ingressClassName: hle` Ingresses. Declare extra hostnames for a tunnel with
+`spec.aliases` (an array of up to 10 FQDNs) or the comma-separated
+`hle.world/aliases` annotation, e.g. `app.example.com`. Each must be on the
+base domain or a zone the account may publish on; a hostname the relay refuses
+is reported in `status.message` and the tunnel still publishes.
+
 ## Values
 
 | Key | Default | Description |

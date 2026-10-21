@@ -141,6 +141,38 @@ class TestCrdToDeclared:
         assert crd_source_ref(body) == "hletunnel:default/grafana"
 
 
+class TestAliases:
+    def test_crd_list_is_normalised(self):
+        result = crd_to_declared(
+            crd(aliases=["App.Example.com.", "b.example.com", "app.example.com"])
+        )
+        assert result.options["aliases"] == "app.example.com,b.example.com"
+
+    def test_annotation_is_normalised(self):
+        body = ingress()
+        body["metadata"]["annotations"] = {"hle.world/aliases": " a.example.com , ,b.example.com"}
+        result = ingress_to_declared(body)
+        assert result.options["aliases"] == "a.example.com,b.example.com"
+
+    def test_no_aliases_leaves_options_unchanged(self):
+        assert "aliases" not in crd_to_declared(crd()).options
+        assert "aliases" not in ingress_to_declared(ingress()).options
+        # Empty and absent are the same declaration: nothing moved.
+        assert crd_to_declared(crd()) == crd_to_declared(crd(aliases=[]))
+
+    @pytest.mark.parametrize("bad", ["https://x.com", "x", "a..b.com"])
+    def test_invalid_entry_names_it(self, bad):
+        with pytest.raises(DeclarationError, match=bad):
+            crd_to_declared(crd(aliases=[bad]))
+
+    def test_both_mappers_agree(self):
+        from_crd = crd_to_declared(crd(aliases=["a.example.com", "b.example.com"]))
+        body = ingress()
+        body["metadata"]["annotations"] = {"hle.world/aliases": "a.example.com,b.example.com"}
+        from_ingress = ingress_to_declared(body)
+        assert from_crd.options == from_ingress.options
+
+
 class TestIngressToDeclared:
     def test_zone_annotation(self):
         body = ingress()

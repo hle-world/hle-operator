@@ -88,6 +88,8 @@ Group: `hle.world`, Version: `v1alpha1`, Kind: `HLETunnel`, Short name: `hlt`
 
 Required fields: `spec.serviceRef` (name + port) and `spec.label`.
 
+Optional `spec.aliases` (array of up to 10 FQDNs) declares extra hostnames for a tunnel.
+
 Printer columns: `kubectl get hlt` shows Phase, Public URL, Label, Sync Policy, Age.
 
 ## Ingress Annotations
@@ -99,6 +101,7 @@ All annotations use the `hle.world/` prefix:
 | `hle.world/label` | Tunnel label (subdomain prefix) | Service name |
 | `hle.world/auth-mode` | `sso` or `none` | `sso` |
 | `hle.world/sync-policy` | `strict` or `initial` | `strict` |
+| `hle.world/aliases` | Comma-separated extra FQDNs | (none) |
 | `hle.world/allowed-users` | `email:provider,...` format | (none) |
 | `hle.world/pin` | 4-8 digit PIN (readable by anyone who can read the Ingress) | (none) |
 | `hle.world/pin-secret` | `name[#key]` of a Secret in the same namespace holding the PIN (key defaults to `pin`) | (none) |

@@ -134,6 +134,26 @@ async def test_conflict_is_failed_with_server_message():
     assert phase(patcher)["message"] == "label is already used by a dashboard-owned endpoint"
 
 
+async def test_refused_alias_message_lands_in_status():
+    publisher, _, registry, patcher, _ = await build()
+    registry.record_ack(
+        DeclaredAck(
+            endpoints=[
+                DeclaredAckEntry(
+                    label="grafana",
+                    status="conflict",
+                    message="alias b.example.com is refused; the tunnel published without it",
+                )
+            ],
+            revision=1,
+        )
+    )
+    await publisher.publish_once()
+    assert phase(patcher)["message"] == (
+        "alias b.example.com is refused; the tunnel published without it"
+    )
+
+
 async def test_connected_carries_url_and_subdomain():
     publisher, client, _, patcher, _ = await build()
     client.statuses = [
