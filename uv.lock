@@ -354,16 +354,16 @@ wheels = [
 
 [[package]]
 name = "hle-client"
-version = "2610.12"
+version = "2610.18"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "httpx" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/46/41/67319d7e7066699b609765ff01b0c1036c70633948bee2398adfa5340708/hle_client-2610.12.tar.gz", hash = "sha256:543261fa94ba57c4fb37394dd45209c30dab2c9d294d00b2b853d576bc6c6cc8", size = 548327, upload-time = "2026-10-19T18:29:46.23Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c9/aa/f17a1ef038713f037944f2595759f9de8a7749d7a51af1a42c7f70fbf41f/hle_client-2610.18.tar.gz", hash = "sha256:8a5a7557776d31f9da04a6b001b33a4a7ec85fd442e9b54c717f3f0cae2ea3cc", size = 556390, upload-time = "2026-10-23T00:16:56.408Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/aa/69/06d5dd80097faea100199dedc1158fda4e102b6cf3503a4f22c7db7d054d/hle_client-2610.12-py3-none-any.whl", hash = "sha256:1af58a4a57d20d6d130a22e39f02d1a86f37d01e0a3b8802889542d86372f728", size = 283940, upload-time = "2026-10-19T18:29:44.4Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/e0/74091c5878944a4b83048abf56f7a35fa13fd7e940a0c3d7316d4d08900f/hle_client-2610.18-py3-none-any.whl", hash = "sha256:7672d7e3410ac90abbbb03c9a2173fdab34caa5f595856a0c5765a6c1f4c395e", size = 290542, upload-time = "2026-10-23T00:16:54.371Z" },
 ]
 
 [[package]]
@@ -388,7 +388,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "hle-client", specifier = ">=2610.12" },
+    { name = "hle-client", specifier = ">=2610.18" },
     { name = "kopf", specifier = ">=1.37" },
     { name = "kubernetes", specifier = ">=28.0" },
     { name = "mypy", marker = "extra == 'dev'" },
