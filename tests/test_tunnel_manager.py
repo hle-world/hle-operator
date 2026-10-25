@@ -329,8 +329,10 @@ class TestManagedTunnel:
         with patch("hle_operator.tunnel_manager.ApiClient", return_value=mock_client):
             await tunnel.reconcile_access_control()
 
-        mock_client.add_access_rule.assert_called_once_with("grafana-x7k", "new@test.com", "github")
-        mock_client.delete_access_rule.assert_called_once_with("grafana-x7k", 2)
+        mock_client.add_access_rule.assert_called_once_with(
+            "grafana-x7k", "new@test.com", "github", zone=None
+        )
+        mock_client.delete_access_rule.assert_called_once_with("grafana-x7k", 2, zone=None)
 
     @pytest.mark.asyncio
     async def test_reconcile_sets_pin(self):
@@ -348,7 +350,7 @@ class TestManagedTunnel:
         with patch("hle_operator.tunnel_manager.ApiClient", return_value=mock_client):
             await tunnel.reconcile_access_control()
 
-        mock_client.set_tunnel_pin.assert_called_once_with("grafana-x7k", "5678")
+        mock_client.set_tunnel_pin.assert_called_once_with("grafana-x7k", "5678", zone=None)
 
     @pytest.mark.asyncio
     async def test_reconcile_removes_pin(self):
@@ -364,4 +366,81 @@ class TestManagedTunnel:
         with patch("hle_operator.tunnel_manager.ApiClient", return_value=mock_client):
             await tunnel.reconcile_access_control()
 
-        mock_client.remove_tunnel_pin.assert_called_once_with("grafana-x7k")
+        mock_client.remove_tunnel_pin.assert_called_once_with("grafana-x7k", zone=None)
+
+    @pytest.mark.asyncio
+    async def test_reconcile_passes_zone_to_every_call(self):
+        spec = self._make_spec(
+            zone="example.com",
+            access_control=AccessControlSpec(
+                allowed_users=[AccessRule("new@test.com", "github")],
+                pin="5678",
+                basic_auth=("user", "pass"),
+            ),
+        )
+        tunnel = ManagedTunnel(spec=spec, api_key="hle_test", logger=MagicMock())
+        tunnel._subdomain = "grafana-x7k"
+
+        mock_client = AsyncMock()
+        mock_client.list_access_rules.return_value = []
+        mock_client.get_tunnel_pin_status.return_value = {"enabled": False}
+        mock_client.get_tunnel_basic_auth_status.return_value = {"enabled": False}
+
+        with patch("hle_operator.tunnel_manager.ApiClient", return_value=mock_client):
+            await tunnel.reconcile_access_control()
+
+        mock_client.list_access_rules.assert_called_once_with(
+            "grafana-x7k",
+            zone="example.com",
+        )
+        mock_client.add_access_rule.assert_called_once_with(
+            "grafana-x7k",
+            "new@test.com",
+            "github",
+            zone="example.com",
+        )
+        mock_client.get_tunnel_pin_status.assert_called_once_with(
+            "grafana-x7k",
+            zone="example.com",
+        )
+        mock_client.set_tunnel_pin.assert_called_once_with(
+            "grafana-x7k",
+            "5678",
+            zone="example.com",
+        )
+        mock_client.get_tunnel_basic_auth_status.assert_called_once_with(
+            "grafana-x7k",
+            zone="example.com",
+        )
+        mock_client.set_tunnel_basic_auth.assert_called_once_with(
+            "grafana-x7k",
+            "user",
+            "pass",
+            zone="example.com",
+        )
+
+    @pytest.mark.asyncio
+    async def test_reconcile_passes_none_zone_when_absent(self):
+        spec = self._make_spec()  # no zone, no access control to add
+        tunnel = ManagedTunnel(spec=spec, api_key="hle_test", logger=MagicMock())
+        tunnel._subdomain = "grafana-x7k"
+
+        mock_client = AsyncMock()
+        mock_client.list_access_rules.return_value = [
+            {"allowed_email": "old@test.com", "provider": "any", "id": 2},
+        ]
+        mock_client.get_tunnel_pin_status.return_value = {"enabled": True}
+        mock_client.get_tunnel_basic_auth_status.return_value = {"enabled": True}
+
+        with patch("hle_operator.tunnel_manager.ApiClient", return_value=mock_client):
+            await tunnel.reconcile_access_control()
+
+        mock_client.list_access_rules.assert_called_once_with("grafana-x7k", zone=None)
+        mock_client.delete_access_rule.assert_called_once_with("grafana-x7k", 2, zone=None)
+        mock_client.get_tunnel_pin_status.assert_called_once_with("grafana-x7k", zone=None)
+        mock_client.remove_tunnel_pin.assert_called_once_with("grafana-x7k", zone=None)
+        mock_client.get_tunnel_basic_auth_status.assert_called_once_with(
+            "grafana-x7k",
+            zone=None,
+        )
+        mock_client.remove_tunnel_basic_auth.assert_called_once_with("grafana-x7k", zone=None)

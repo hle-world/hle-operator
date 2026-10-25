@@ -354,7 +354,7 @@ wheels = [
 
 [[package]]
 name = "hle-client"
-version = "2610.18"
+version = "2610.19"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -388,7 +388,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "hle-client", specifier = ">=2610.18" },
+    { name = "hle-client", specifier = ">=2610.19" },
     { name = "kopf", specifier = ">=1.37" },
     { name = "kubernetes", specifier = ">=28.0" },
     { name = "mypy", marker = "extra == 'dev'" },
