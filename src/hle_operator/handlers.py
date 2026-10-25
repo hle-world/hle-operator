@@ -15,9 +15,12 @@ from hle_operator.config import allow_cross_namespace, get_api_key, load_api_key
 from hle_operator.tunnel_manager import (
     ManagedTunnel,
     ManagedTunnelSpec,
+    RecoveredCallback,
     RefusedCallback,
     SpecError,
+    TargetRefused,
     build_service_url,
+    is_transient_refusal,
     parse_crd_spec,
     parse_ingress_annotations,
 )
@@ -116,6 +119,7 @@ async def on_tunnel_create(
         api_key=api_key,
         logger=logger,
         on_refused=_crd_refused(ns, name, key),
+        on_recovered=_crd_recovered(ns, name, key),
     )
     _tunnels[key] = tunnel
 
@@ -123,6 +127,17 @@ async def on_tunnel_create(
     patch.status["message"] = "Starting tunnel"
     try:
         await tunnel.start()
+    except TargetRefused as exc:
+        _tunnels.pop(key, None)
+        if is_transient_refusal(str(exc)):
+            patch.status["phase"] = "Pending"
+            patch.status["message"] = f"waiting for DNS: {exc}"
+            logger.warning("HLETunnel %s waiting for DNS: %s", key, exc)
+            raise kopf.TemporaryError(f"waiting for DNS: {exc}", delay=30) from exc
+        patch.status["phase"] = "Failed"
+        patch.status["message"] = str(exc)
+        logger.error("HLETunnel %s refused: %s", key, exc)
+        return {"phase": "Failed"}
     except SpecError as exc:
         _tunnels.pop(key, None)
         patch.status["phase"] = "Failed"
@@ -333,10 +348,18 @@ async def on_ingress_create(
         api_key=api_key,
         logger=logger,
         on_refused=_ingress_refused(body, key),
+        on_recovered=_ingress_recovered(body, key),
     )
     _ingress_tunnels[key] = tunnel
     try:
         await tunnel.start()
+    except TargetRefused as exc:
+        _ingress_tunnels.pop(key, None)
+        if is_transient_refusal(str(exc)):
+            logger.warning("Ingress %s waiting for DNS: %s", key, exc)
+            raise kopf.TemporaryError(f"waiting for DNS: {exc}", delay=30) from exc
+        logger.error("Ingress %s refused: %s", key, exc)
+        return {"phase": "Failed", "message": str(exc)}
     except SpecError as exc:
         _ingress_tunnels.pop(key, None)
         logger.error("Ingress %s refused: %s", key, exc)
@@ -427,6 +450,43 @@ def _ingress_refused(body: Any, key: str) -> RefusedCallback:
             kopf.warn(body, reason="TargetRefused", message=message)
         except Exception:  # noqa: BLE001 — the log line is the fallback
             logger.error("Ingress %s refused: %s", key, message)
+
+    return report
+
+
+def _crd_recovered(namespace: str, name: str, key: str) -> RecoveredCallback:
+    """Report a recovered HLETunnel: put it back and mark it Connected."""
+
+    async def report(tunnel: ManagedTunnel) -> None:
+        current = _tunnels.get(key)
+        if current is None or current is tunnel:
+            _tunnels[key] = tunnel
+        connected = await tunnel.wait_connected(timeout=30.0)
+        if connected:
+            status = {
+                "phase": "Connected",
+                "publicUrl": tunnel.public_url or "",
+                "subdomain": tunnel.subdomain or "",
+                "message": "",
+            }
+        else:
+            status = {"phase": "Pending", "message": "Recovered; reconnecting"}
+        await asyncio.to_thread(_patch_crd_status, namespace, name, status)
+
+    return report
+
+
+def _ingress_recovered(body: Any, key: str) -> RecoveredCallback:
+    """Same for an Ingress: put it back and surface recovery as a Normal Event."""
+
+    async def report(tunnel: ManagedTunnel) -> None:
+        current = _ingress_tunnels.get(key)
+        if current is None or current is tunnel:
+            _ingress_tunnels[key] = tunnel
+        try:
+            kopf.event(body, type="Normal", reason="TargetAllowed", message="Target allowed again")
+        except Exception:  # noqa: BLE001 — the log line is the fallback
+            logger.info("Ingress %s recovered", key)
 
     return report
 
