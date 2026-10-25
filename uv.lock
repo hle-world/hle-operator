@@ -361,9 +361,9 @@ dependencies = [
     { name = "httpx" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c9/aa/f17a1ef038713f037944f2595759f9de8a7749d7a51af1a42c7f70fbf41f/hle_client-2610.18.tar.gz", hash = "sha256:8a5a7557776d31f9da04a6b001b33a4a7ec85fd442e9b54c717f3f0cae2ea3cc", size = 556390, upload-time = "2026-10-23T00:16:56.408Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/93/3c/c9b594dc699b9b05bd83ab06473033059a1679edb687c81d757933ba9d11/hle_client-2610.19.tar.gz", hash = "sha256:957e530d30aa26906f80a72c0bc244aa33f48eca74724bcedb60b58ed879021b", size = 559335, upload-time = "2026-10-25T08:48:01.617Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8f/e0/74091c5878944a4b83048abf56f7a35fa13fd7e940a0c3d7316d4d08900f/hle_client-2610.18-py3-none-any.whl", hash = "sha256:7672d7e3410ac90abbbb03c9a2173fdab34caa5f595856a0c5765a6c1f4c395e", size = 290542, upload-time = "2026-10-23T00:16:54.371Z" },
+    { url = "https://files.pythonhosted.org/packages/49/a4/d509341cc927bcd71133d1a21aea79102366296ac93400f8b937d8861d89/hle_client-2610.19-py3-none-any.whl", hash = "sha256:a8272e660c0f6b03ebe4e9c9daa56f504a92f1c2c576e100f239789b24402764", size = 291461, upload-time = "2026-10-25T08:47:59.836Z" },
 ]
 
 [[package]]

@@ -252,8 +252,8 @@ h11==0.16.0 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
     # via httpcore
 hle-client==2610.19 \
-    --hash=sha256:7672d7e3410ac90abbbb03c9a2173fdab34caa5f595856a0c5765a6c1f4c395e \
-    --hash=sha256:8a5a7557776d31f9da04a6b001b33a4a7ec85fd442e9b54c717f3f0cae2ea3cc
+    --hash=sha256:957e530d30aa26906f80a72c0bc244aa33f48eca74724bcedb60b58ed879021b \
+    --hash=sha256:a8272e660c0f6b03ebe4e9c9daa56f504a92f1c2c576e100f239789b24402764
     # via hle-operator
 httpcore==1.0.9 \
     --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55 \
