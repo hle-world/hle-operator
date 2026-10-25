@@ -79,9 +79,37 @@ class ManagedTunnelSpec:
 # How often a running tunnel re-runs the target guard (CRD and Ingress alike).
 RECHECK_INTERVAL = 60.0
 
+# Consecutive transient refusals a running tunnel tolerates before it is
+# stopped. A cluster DNS outage answers every recheck at once; three failures
+# (about three intervals) distinguish it from a name that is genuinely gone.
+TRANSIENT_REFUSAL_LIMIT = 3
+
+# How long a refused tunnel waits before rechecking its target. Transient
+# refusals back off until they settle on the steady delay; permanent ones are
+# retried at that steady delay because the Service, namespace exclusion or
+# policy may change.
+TRANSIENT_RECOVERY_DELAYS: tuple[float, ...] = (30.0, 60.0, 120.0, 300.0)
+PERMANENT_RECOVERY_DELAY = 300.0
+
+
+def is_transient_refusal(reason: str) -> bool:
+    """True when the guard refused only because a name could not be resolved.
+
+    A short cluster DNS outage must not permanently stop a tunnel: the same
+    name is expected to resolve again shortly. Everything else (excluded
+    namespace, kube API / metadata address, cross-namespace, raw URL) is a
+    policy decision that does not fix itself.
+    """
+    return "cannot resolve" in reason
+
+
 # Called as ``on_refused(tunnel, message)`` after a running tunnel was stopped
 # because its target is no longer allowed.
 RefusedCallback = Callable[["ManagedTunnel", str], Awaitable[None]]
+
+# Called as ``on_recovered(tunnel)`` after a refused target is allowed again and
+# the connection has been restarted.
+RecoveredCallback = Callable[["ManagedTunnel"], Awaitable[None]]
 
 
 class ManagedTunnel:
@@ -94,9 +122,11 @@ class ManagedTunnel:
         logger: logging.Logger,
         guard: KubernetesTargetGuard | None = None,
         on_refused: RefusedCallback | None = None,
+        on_recovered: RecoveredCallback | None = None,
         recheck_interval: float = RECHECK_INTERVAL,
     ) -> None:
         self._on_refused = on_refused
+        self._on_recovered = on_recovered
         self._recheck_interval = recheck_interval
         self._recheck_task: asyncio.Task[None] | None = None
         self._spec = spec
@@ -104,6 +134,7 @@ class ManagedTunnel:
         self._logger = logger
         self._guard = guard
         self._pinned_address: str | None = None
+        self._transient_failures = 0
         self._tunnel: Tunnel | None = None
         self._task: asyncio.Task[None] | None = None
         self._subdomain: str | None = None
@@ -193,17 +224,32 @@ class ManagedTunnel:
 
         The address is pinned at start, so a Service recreated with a new
         ClusterIP would otherwise stay unreachable until the next spec change.
-        Raises :class:`TargetRefused` (after stopping the connection) when the
-        target is no longer allowed.
+        A transient refusal (a name that does not resolve) is tolerated up to
+        :data:`TRANSIENT_REFUSAL_LIMIT` times in a row — the tunnel keeps its
+        pinned address and stays connected — before it is treated like a
+        permanent refusal. Raises :class:`TargetRefused` (after stopping the
+        connection) once the target is no longer allowed.
         """
         if self._stopped or self._tunnel is None:
             return
         previous = self._pinned_address
         try:
             await self._approved_target()
-        except TargetRefused:
+        except TargetRefused as exc:
+            if is_transient_refusal(str(exc)):
+                self._transient_failures += 1
+                if self._transient_failures < TRANSIENT_REFUSAL_LIMIT:
+                    self._logger.warning(
+                        "Transient target refusal for %s (%d/%d): %s",
+                        self._spec.label,
+                        self._transient_failures,
+                        TRANSIENT_REFUSAL_LIMIT,
+                        exc,
+                    )
+                    return
             await self._stop_connection()
             raise
+        self._transient_failures = 0
         if self._pinned_address != previous:
             self._logger.info("Upstream address changed; reconnecting")
             await self._stop_connection()
@@ -222,10 +268,42 @@ class ManagedTunnel:
                         await self._on_refused(self, str(exc))
                     except Exception:
                         self._logger.exception("Reporting a refused target failed")
-                return
+                # Stay in this task: a delete or spec change cancels it via stop().
+                await self._recover_loop(transient=is_transient_refusal(str(exc)))
             except Exception:
                 # A DNS or API blip must not end the loop; try again next round.
                 self._logger.exception("Target recheck failed; retrying")
+
+    async def _recover_loop(self, *, transient: bool) -> None:
+        """Keep rechecking a refused target and restart the tunnel once allowed.
+
+        Runs inside ``_recheck_task``, so ``stop()`` cancels it along with the
+        normal recheck. A transient refusal backs off 30s → 60s → 120s → 300s;
+        a permanent one is retried every 300s because the Service, namespace
+        exclusion or policy may change.
+        """
+        delays = TRANSIENT_RECOVERY_DELAYS if transient else (PERMANENT_RECOVERY_DELAY,)
+        index = 0
+        while True:
+            await asyncio.sleep(delays[min(index, len(delays) - 1)])
+            try:
+                await self._start_connection()
+            except TargetRefused as exc:
+                self._logger.warning("Target still refused for %s: %s", self._spec.label, exc)
+                index += 1
+                continue
+            except Exception:
+                self._logger.exception("Recovery recheck failed; retrying")
+                index += 1
+                continue
+            self._transient_failures = 0
+            self._logger.info("Target allowed again; tunnel %s restarted", self._spec.label)
+            if self._on_recovered is not None:
+                try:
+                    await self._on_recovered(self)
+                except Exception:
+                    self._logger.exception("Reporting a recovered target failed")
+            return
 
     async def stop(self) -> None:
         """Stop the tunnel, its recheck loop and the background task."""
