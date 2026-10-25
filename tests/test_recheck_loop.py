@@ -272,7 +272,7 @@ class TestTransientRefusal:
 
 
 class TestHandlerReporting:
-    async def test_crd_tunnel_refusal_drops_it_and_marks_the_cr_failed(self):
+    async def test_crd_tunnel_refusal_keeps_it_registered_and_marks_the_cr_failed(self):
         patched: list[tuple] = []
         key = "team-a/x"
         holder: dict[str, ManagedTunnel] = {}
@@ -294,7 +294,9 @@ class TestHandlerReporting:
                 mock_tunnel.return_value.disconnect = AsyncMock()
                 await tunnel.start()
                 await settle(lambda: bool(patched))
-            assert key not in handlers._tunnels
+            # Still registered, so the delete/update handlers can stop its
+            # recovery loop.
+            assert handlers._tunnels[key] is tunnel
             ns, name, status = patched[0]
             assert (ns, name, status["phase"]) == ("team-a", "x", "Failed")
             assert "target refused" in status["message"]
@@ -302,7 +304,7 @@ class TestHandlerReporting:
             handlers._tunnels.pop(key, None)
             await tunnel.stop()
 
-    async def test_ingress_tunnel_refusal_drops_it_and_posts_an_event(self):
+    async def test_ingress_tunnel_refusal_keeps_it_registered_and_posts_an_event(self):
         key = "apps/web"
         body = {"metadata": {"name": "web", "namespace": "apps"}}
         callback = handlers._ingress_refused(body, key)
@@ -319,7 +321,7 @@ class TestHandlerReporting:
                 mock_tunnel.return_value.disconnect = AsyncMock()
                 await tunnel.start()
                 await settle(lambda: warn.called)
-            assert key not in handlers._ingress_tunnels
+            assert handlers._ingress_tunnels[key] is tunnel
             assert warn.call_args.kwargs["reason"] == "TargetRefused"
         finally:
             handlers._ingress_tunnels.pop(key, None)
@@ -337,7 +339,7 @@ class TestHandlerReporting:
         finally:
             handlers._ingress_tunnels.pop(key, None)
 
-    async def test_crd_recovery_reinserts_and_marks_it_connected(self):
+    async def test_crd_recovery_marks_it_connected(self):
         key = "team-a/x"
         patched: list[tuple] = []
         callback = handlers._crd_recovered("team-a", "x", key)
@@ -345,7 +347,7 @@ class TestHandlerReporting:
         tunnel.wait_connected = AsyncMock(return_value=True)
         tunnel.public_url = "https://x.hle.world"
         tunnel.subdomain = "x-abc"
-        handlers._tunnels.pop(key, None)
+        handlers._tunnels[key] = tunnel
         try:
             with patch(
                 "hle_operator.handlers._patch_crd_status",
@@ -357,20 +359,50 @@ class TestHandlerReporting:
         finally:
             handlers._tunnels.pop(key, None)
 
-    async def test_ingress_recovery_reinserts_and_posts_a_normal_event(self):
+    async def test_recovery_of_a_deleted_or_replaced_tunnel_reports_nothing(self):
+        key = "team-a/x"
+        patched: list[tuple] = []
+        callback = handlers._crd_recovered("team-a", "x", key)
+        stale = MagicMock()
+        stale.wait_connected = AsyncMock(return_value=True)
+        handlers._tunnels.pop(key, None)
+        try:
+            with patch(
+                "hle_operator.handlers._patch_crd_status",
+                side_effect=lambda ns, name, status: patched.append((ns, name, status)),
+            ):
+                await callback(stale)  # deleted: key gone
+                handlers._tunnels[key] = MagicMock()
+                await callback(stale)  # replaced by a newer tunnel
+            assert patched == []
+            assert handlers._tunnels[key] is not stale
+        finally:
+            handlers._tunnels.pop(key, None)
+
+    async def test_ingress_recovery_posts_a_normal_event(self):
         key = "apps/web"
         body = {"metadata": {"name": "web", "namespace": "apps"}}
         callback = handlers._ingress_recovered(body, key)
         tunnel = MagicMock()
-        handlers._ingress_tunnels.pop(key, None)
+        handlers._ingress_tunnels[key] = tunnel
         try:
             with patch("hle_operator.handlers.kopf.event") as event:
                 await callback(tunnel)
-            assert handlers._ingress_tunnels[key] is tunnel
             assert event.call_args.kwargs["type"] == "Normal"
             assert event.call_args.kwargs["reason"] == "TargetAllowed"
         finally:
             handlers._ingress_tunnels.pop(key, None)
+
+    async def test_deleting_a_refused_tunnel_stops_its_recovery_loop(self):
+        key = "team-a/x"
+        tunnel = MagicMock()
+        tunnel.stop = AsyncMock()
+        handlers._tunnels[key] = tunnel
+        with patch("hle_operator.handlers._patch_crd_status"):
+            await handlers._crd_refused("team-a", "x", key)(tunnel, "target refused: x")
+        await handlers.on_tunnel_delete(name="x", namespace="team-a", logger=MagicMock())
+        tunnel.stop.assert_awaited_once()
+        assert key not in handlers._tunnels
 
     async def test_ingress_and_crd_handlers_pass_the_callback(self):
         spec = {
@@ -448,4 +480,3 @@ class TestCreateDuringDnsOutage:
         assert result == {"phase": "Failed"}
         assert patch_obj.status["phase"] == "Failed"
         assert "team-a/x" not in handlers._tunnels
-

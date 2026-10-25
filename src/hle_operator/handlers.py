@@ -428,11 +428,14 @@ async def on_ingress_delete(
 
 
 def _crd_refused(namespace: str, name: str, key: str) -> RefusedCallback:
-    """Report a running HLETunnel whose target became refused: drop it, status Failed."""
+    """Report a running HLETunnel whose target became refused: status Failed.
+
+    The tunnel stays in ``_tunnels``: its recovery loop keeps running, and only
+    a registered tunnel is stopped by the delete and update handlers. Dropping
+    it here would leave that loop to resurrect a deleted resource.
+    """
 
     async def report(tunnel: ManagedTunnel, message: str) -> None:
-        if _tunnels.get(key) is tunnel:
-            _tunnels.pop(key, None)
         await asyncio.to_thread(
             _patch_crd_status, namespace, name, {"phase": "Failed", "message": message}
         )
@@ -441,11 +444,9 @@ def _crd_refused(namespace: str, name: str, key: str) -> RefusedCallback:
 
 
 def _ingress_refused(body: Any, key: str) -> RefusedCallback:
-    """Same for an Ingress: drop it and surface the reason as an Event."""
+    """Same for an Ingress: keep it registered, surface the reason as an Event."""
 
     async def report(tunnel: ManagedTunnel, message: str) -> None:
-        if _ingress_tunnels.get(key) is tunnel:
-            _ingress_tunnels.pop(key, None)
         try:
             kopf.warn(body, reason="TargetRefused", message=message)
         except Exception:  # noqa: BLE001 — the log line is the fallback
@@ -455,12 +456,11 @@ def _ingress_refused(body: Any, key: str) -> RefusedCallback:
 
 
 def _crd_recovered(namespace: str, name: str, key: str) -> RecoveredCallback:
-    """Report a recovered HLETunnel: put it back and mark it Connected."""
+    """Report a recovered HLETunnel: mark it Connected (or Pending until it is)."""
 
     async def report(tunnel: ManagedTunnel) -> None:
-        current = _tunnels.get(key)
-        if current is None or current is tunnel:
-            _tunnels[key] = tunnel
+        if _tunnels.get(key) is not tunnel:
+            return  # deleted or replaced meanwhile; its owner reports status
         connected = await tunnel.wait_connected(timeout=30.0)
         if connected:
             status = {
@@ -477,12 +477,11 @@ def _crd_recovered(namespace: str, name: str, key: str) -> RecoveredCallback:
 
 
 def _ingress_recovered(body: Any, key: str) -> RecoveredCallback:
-    """Same for an Ingress: put it back and surface recovery as a Normal Event."""
+    """Same for an Ingress: surface recovery as a Normal Event."""
 
     async def report(tunnel: ManagedTunnel) -> None:
-        current = _ingress_tunnels.get(key)
-        if current is None or current is tunnel:
-            _ingress_tunnels[key] = tunnel
+        if _ingress_tunnels.get(key) is not tunnel:
+            return
         try:
             kopf.event(body, type="Normal", reason="TargetAllowed", message="Target allowed again")
         except Exception:  # noqa: BLE001 — the log line is the fallback
