@@ -16,7 +16,9 @@ dependencies = [
     # spec_resolver, endpoint_statuses and HLE_HANDOVER_GROUP. 2610.10 bounds
     # memory under many parallel downloads (one process serves every tunnel in
     # legacy mode, so unbounded streaming OOM-killed the whole pod).
-    "hle-client>=2610.18",
+    # 2610.19 adds keyword-only zone= to the per-tunnel ApiClient settings
+    # calls, so a label held on two zones can be disambiguated instead of 409.
+    "hle-client>=2610.19",
 ]
 
 [project.optional-dependencies]

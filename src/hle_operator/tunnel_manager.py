@@ -377,7 +377,9 @@ class ManagedTunnel:
             return
 
         try:
-            current_rules: list[dict[str, Any]] = await client.list_access_rules(self._subdomain)
+            current_rules: list[dict[str, Any]] = await client.list_access_rules(
+                self._subdomain, zone=self._spec.zone
+            )
         except Exception:
             self._logger.exception("Failed to list access rules")
             return
@@ -395,7 +397,12 @@ class ManagedTunnel:
         # Add missing rules
         for email, provider in desired - set(current.keys()):
             try:
-                await client.add_access_rule(self._subdomain, email, provider)
+                await client.add_access_rule(
+                    self._subdomain,
+                    email,
+                    provider,
+                    zone=self._spec.zone,
+                )
                 self._logger.info("Added access rule: %s (%s)", email, provider)
             except Exception:
                 self._logger.exception("Failed to add access rule: %s", email)
@@ -404,7 +411,11 @@ class ManagedTunnel:
         for key, rule_id in current.items():
             if key not in desired:
                 try:
-                    await client.delete_access_rule(self._subdomain, rule_id)
+                    await client.delete_access_rule(
+                        self._subdomain,
+                        rule_id,
+                        zone=self._spec.zone,
+                    )
                     self._logger.info("Removed access rule: %s (%s)", key[0], key[1])
                 except Exception:
                     self._logger.exception("Failed to remove access rule: %s", key[0])
@@ -415,7 +426,10 @@ class ManagedTunnel:
             return
 
         try:
-            pin_status = await client.get_tunnel_pin_status(self._subdomain)
+            pin_status = await client.get_tunnel_pin_status(
+                self._subdomain,
+                zone=self._spec.zone,
+            )
             has_pin = pin_status.get("enabled", False)
         except Exception:
             self._logger.exception("Failed to get PIN status")
@@ -425,19 +439,19 @@ class ManagedTunnel:
 
         if desired_pin and not has_pin:
             try:
-                await client.set_tunnel_pin(self._subdomain, desired_pin)
+                await client.set_tunnel_pin(self._subdomain, desired_pin, zone=self._spec.zone)
                 self._logger.info("PIN set on tunnel")
             except Exception:
                 self._logger.exception("Failed to set PIN")
         elif desired_pin and has_pin:
             # Update PIN (always set — we can't check if it matches)
             try:
-                await client.set_tunnel_pin(self._subdomain, desired_pin)
+                await client.set_tunnel_pin(self._subdomain, desired_pin, zone=self._spec.zone)
             except Exception:
                 self._logger.exception("Failed to update PIN")
         elif not desired_pin and has_pin:
             try:
-                await client.remove_tunnel_pin(self._subdomain)
+                await client.remove_tunnel_pin(self._subdomain, zone=self._spec.zone)
                 self._logger.info("PIN removed from tunnel")
             except Exception:
                 self._logger.exception("Failed to remove PIN")
@@ -448,7 +462,9 @@ class ManagedTunnel:
             return
 
         try:
-            ba_status = await client.get_tunnel_basic_auth_status(self._subdomain)
+            ba_status = await client.get_tunnel_basic_auth_status(
+                self._subdomain, zone=self._spec.zone
+            )
             has_ba = ba_status.get("enabled", False)
         except Exception:
             self._logger.exception("Failed to get basic auth status")
@@ -458,18 +474,22 @@ class ManagedTunnel:
 
         if desired_ba and not has_ba:
             try:
-                await client.set_tunnel_basic_auth(self._subdomain, desired_ba[0], desired_ba[1])
+                await client.set_tunnel_basic_auth(
+                    self._subdomain, desired_ba[0], desired_ba[1], zone=self._spec.zone
+                )
                 self._logger.info("Basic auth set on tunnel")
             except Exception:
                 self._logger.exception("Failed to set basic auth")
         elif desired_ba and has_ba:
             try:
-                await client.set_tunnel_basic_auth(self._subdomain, desired_ba[0], desired_ba[1])
+                await client.set_tunnel_basic_auth(
+                    self._subdomain, desired_ba[0], desired_ba[1], zone=self._spec.zone
+                )
             except Exception:
                 self._logger.exception("Failed to update basic auth")
         elif not desired_ba and has_ba:
             try:
-                await client.remove_tunnel_basic_auth(self._subdomain)
+                await client.remove_tunnel_basic_auth(self._subdomain, zone=self._spec.zone)
                 self._logger.info("Basic auth removed from tunnel")
             except Exception:
                 self._logger.exception("Failed to remove basic auth")
