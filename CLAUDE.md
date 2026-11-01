@@ -110,6 +110,7 @@ All annotations use the `hle.world/` prefix:
 | `hle.world/websocket-enabled` | Enable WS proxying | `true` |
 | `hle.world/forward-host` | Forward browser Host header | `false` |
 | `hle.world/verify-ssl` | Verify upstream SSL | `false` |
+| `hle.world/response-timeout` | Relay wait for the upstream to start answering, `1`-`1200` s | relay default (30 s) |
 
 ## Helm Chart
 

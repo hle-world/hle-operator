@@ -17,6 +17,7 @@ from hle_common.agent_protocol import (
     DeclaredEndpoint,
     K8sServiceTarget,
 )
+from hle_common.tunnel_spec import MAX_RESPONSE_TIMEOUT
 
 # A tunnel label becomes the left-most subdomain label: DNS-1123, lower-case.
 _LABEL_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
@@ -47,6 +48,42 @@ def normalise_label(raw: str) -> str:
     if not label or len(label) > _LABEL_MAX or not _LABEL_RE.match(label):
         raise DeclarationError(f"invalid label {raw!r}: must be a lower-case DNS label")
     return label
+
+
+def _response_timeout(raw: Any, field_name: str) -> int | None:
+    """Parse an optional response timeout (seconds) from a CRD field or annotation.
+
+    Missing/empty means unset (``None``) so the relay default applies. An int or
+    a numeric string is accepted; booleans, other types and values outside
+    ``1..MAX_RESPONSE_TIMEOUT`` raise :class:`DeclarationError` naming the field.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        raise DeclarationError(
+            f"invalid {field_name} {raw!r}: must be an integer 1..{MAX_RESPONSE_TIMEOUT}"
+        )
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return None
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise DeclarationError(
+                f"invalid {field_name} {raw!r}: must be an integer 1..{MAX_RESPONSE_TIMEOUT}"
+            ) from exc
+    elif isinstance(raw, int):
+        value = raw
+    else:
+        raise DeclarationError(
+            f"invalid {field_name} {raw!r}: must be an integer 1..{MAX_RESPONSE_TIMEOUT}"
+        )
+    if not 1 <= value <= MAX_RESPONSE_TIMEOUT:
+        raise DeclarationError(
+            f"invalid {field_name} {raw!r}: must be an integer 1..{MAX_RESPONSE_TIMEOUT}"
+        )
+    return value
 
 
 def crd_source_ref(body: Mapping[str, Any]) -> str:
@@ -288,6 +325,7 @@ def crd_to_declared(
             websocket_enabled=spec.get("websocketEnabled", True),
             forward_host=spec.get("forwardHost", False),
             verify_ssl=spec.get("verifySSL", False),
+            response_timeout=_response_timeout(spec.get("responseTimeout"), "responseTimeout"),
             sync_policy=spec.get("syncPolicy", "strict"),
             source_ref=crd_source_ref(body),
             upstream_basic_auth_secret=upstream_secret,
@@ -358,6 +396,9 @@ def ingress_to_declared(
             == "true",
             forward_host=annotations.get("hle.world/forward-host", "false").lower() == "true",
             verify_ssl=annotations.get("hle.world/verify-ssl", "false").lower() == "true",
+            response_timeout=_response_timeout(
+                annotations.get("hle.world/response-timeout"), "hle.world/response-timeout"
+            ),
             sync_policy=annotations.get("hle.world/sync-policy", "strict"),
             source_ref=ingress_source_ref(body),
             access=access,

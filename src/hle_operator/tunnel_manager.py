@@ -14,6 +14,7 @@ from hle_client.api import ApiClient, ApiClientConfig
 from hle_client.k8s_targets import KubernetesTargetGuard, authority_of
 from hle_client.tunnel import Tunnel, TunnelConfig, TunnelFatalError
 from hle_common.agent_protocol import K8sServiceTarget
+from hle_common.tunnel_spec import MAX_RESPONSE_TIMEOUT
 
 
 class SpecError(ValueError):
@@ -46,6 +47,42 @@ def build_service_url(namespace: str, name: str, port: int | str, scheme: str) -
     return f"{target.scheme}://{target.name}.{target.namespace}.svc:{target.port}"
 
 
+def _response_timeout(raw: Any, field_name: str) -> int | None:
+    """Parse an optional response timeout (seconds) from a CRD field or annotation.
+
+    Missing/empty means unset (``None``) so the relay default applies. An int or
+    a numeric string is accepted; booleans, other types and values outside
+    ``1..MAX_RESPONSE_TIMEOUT`` raise :class:`SpecError` naming the field.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        raise SpecError(
+            f"invalid {field_name} {raw!r}: must be an integer 1..{MAX_RESPONSE_TIMEOUT}"
+        )
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return None
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise SpecError(
+                f"invalid {field_name} {raw!r}: must be an integer 1..{MAX_RESPONSE_TIMEOUT}"
+            ) from exc
+    elif isinstance(raw, int):
+        value = raw
+    else:
+        raise SpecError(
+            f"invalid {field_name} {raw!r}: must be an integer 1..{MAX_RESPONSE_TIMEOUT}"
+        )
+    if not 1 <= value <= MAX_RESPONSE_TIMEOUT:
+        raise SpecError(
+            f"invalid {field_name} {raw!r}: must be an integer 1..{MAX_RESPONSE_TIMEOUT}"
+        )
+    return value
+
+
 @dataclass
 class AccessRule:
     email: str
@@ -74,6 +111,8 @@ class ManagedTunnelSpec:
     # Custom zone to publish under (None = base domain); apex serves at its root.
     zone: str | None = None
     apex: bool = False
+    # Seconds the relay waits for the upstream to start answering (None = relay default).
+    response_timeout: int | None = None
 
 
 # How often a running tunnel re-runs the target guard (CRD and Ingress alike).
@@ -192,6 +231,7 @@ class ManagedTunnel:
             verify_ssl=self._spec.verify_ssl,
             zone=self._spec.zone,
             apex=self._spec.apex,
+            response_timeout=self._spec.response_timeout,
             managed_by="hle-operator" if self._spec.sync_policy == "strict" else None,
         )
 
@@ -543,6 +583,7 @@ def parse_crd_spec(
         ),
         zone=_zone(spec.get("zone")),
         apex=bool(spec.get("apex", False)),
+        response_timeout=_response_timeout(spec.get("responseTimeout"), "responseTimeout"),
     )
 
 
@@ -610,4 +651,7 @@ def parse_ingress_annotations(
         ),
         zone=_zone(annotations.get("hle.world/zone")),
         apex=annotations.get("hle.world/apex", "false").lower() == "true",
+        response_timeout=_response_timeout(
+            annotations.get("hle.world/response-timeout"), "hle.world/response-timeout"
+        ),
     )

@@ -173,6 +173,37 @@ class TestAliases:
         assert from_crd.options == from_ingress.options
 
 
+class TestResponseTimeout:
+    def test_unset_is_none(self):
+        assert crd_to_declared(crd()).response_timeout is None
+        assert ingress_to_declared(ingress()).response_timeout is None
+
+    def test_crd_int(self):
+        assert crd_to_declared(crd(responseTimeout=180)).response_timeout == 180
+
+    def test_ingress_string_annotation(self):
+        body = ingress()
+        body["metadata"]["annotations"] = {"hle.world/response-timeout": "180"}
+        assert ingress_to_declared(body).response_timeout == 180
+
+    def test_empty_annotation_is_none(self):
+        body = ingress()
+        body["metadata"]["annotations"] = {"hle.world/response-timeout": ""}
+        assert ingress_to_declared(body).response_timeout is None
+
+    @pytest.mark.parametrize("bad", [0, 1201, "abc", True])
+    def test_crd_rejects_and_names_field(self, bad):
+        with pytest.raises(DeclarationError, match="responseTimeout"):
+            crd_to_declared(crd(responseTimeout=bad))
+
+    @pytest.mark.parametrize("bad", ["0", "1201", "abc", "True"])
+    def test_ingress_rejects_and_names_field(self, bad):
+        body = ingress()
+        body["metadata"]["annotations"] = {"hle.world/response-timeout": bad}
+        with pytest.raises(DeclarationError, match="hle.world/response-timeout"):
+            ingress_to_declared(body)
+
+
 class TestIngressToDeclared:
     def test_zone_annotation(self):
         body = ingress()

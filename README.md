@@ -272,6 +272,18 @@ Extra hostnames for a tunnel, served in addition to its `<label>.<zone>` name:
 
 On an Ingress, use the comma-separated annotation `hle.world/aliases: "a.example.com,b.example.com"`.
 
+### spec.responseTimeout
+
+Seconds the relay waits for the upstream service to start answering one request
+before returning `504`. Unset = relay default (30 s). Raise it for slow endpoints
+such as Sonarr/Radarr interactive search.
+
+| Field | Type | Description |
+|---|---|---|
+| `responseTimeout` | integer | Seconds, `1`–`1200`. Unset applies the relay default (30 s). |
+
+On an Ingress, use the annotation `hle.world/response-timeout: "180"`.
+
 ### spec.syncPolicy
 
 - **`strict`** (default) — Operator continuously reconciles access control. Dashboard edits are overwritten every 60 seconds.
