@@ -125,6 +125,14 @@ spec:
                   type: boolean
                   description: Verify SSL certificates when connecting to the upstream service.
                   default: false
+                responseTimeout:
+                  type: integer
+                  minimum: 1
+                  maximum: 1200
+                  description: >
+                    Seconds the relay waits for the upstream service to start answering one request
+                    before returning 504. Unset = relay default (30 s). Raise it for slow endpoints
+                    such as Sonarr/Radarr interactive search.
                 syncPolicy:
                   type: string
                   description: >

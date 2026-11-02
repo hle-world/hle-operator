@@ -36,6 +36,11 @@ With `gitops.enabled` the chart installs the `HLETunnel` CRD and reconciles
 base domain or a zone the account may publish on; a hostname the relay refuses
 is reported in `status.message` and the tunnel still publishes.
 
+Set `spec.responseTimeout` (or the `hle.world/response-timeout` annotation) to
+raise the relay's wait for the upstream to start answering, in seconds (`1`–`1200`;
+unset keeps the relay default of 30 s) — useful for slow endpoints such as
+Sonarr/Radarr interactive search.
+
 ## Values
 
 | Key | Default | Description |

@@ -468,6 +468,21 @@ class TestCrd:
         assert ref["required"] == ["name"]
         assert ref["properties"]["key"]["default"] == "pin"
 
+    @requires_helm
+    def test_response_timeout_is_bounded_and_has_no_default(self):
+        crd = next(
+            d
+            for d in _render("credential.value=hle_x")
+            if d.get("kind") == "CustomResourceDefinition"
+        )
+        spec = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+        timeout = spec["properties"]["responseTimeout"]
+        assert timeout["type"] == "integer"
+        assert timeout["minimum"] == 1
+        assert timeout["maximum"] == 1200
+        # No default: unset must reach the relay, which applies its own (30 s).
+        assert "default" not in timeout
+
 
 class TestSeparateLegacyAgent:
     @requires_helm

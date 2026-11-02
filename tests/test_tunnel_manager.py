@@ -11,6 +11,7 @@ from hle_operator.tunnel_manager import (
     AccessRule,
     ManagedTunnel,
     ManagedTunnelSpec,
+    SpecError,
     parse_crd_spec,
     parse_ingress_annotations,
 )
@@ -105,6 +106,20 @@ class TestParseCrdSpec:
         assert result.zone == "zone.example"
         assert result.apex is True
 
+    def test_response_timeout_defaults_to_none(self):
+        result = parse_crd_spec({"serviceRef": {"name": "web", "port": 80}, "label": "web"})
+        assert result.response_timeout is None
+
+    def test_response_timeout_int(self):
+        spec = {"serviceRef": {"name": "web", "port": 80}, "label": "web", "responseTimeout": 180}
+        assert parse_crd_spec(spec).response_timeout == 180
+
+    @pytest.mark.parametrize("bad", [0, 1201, "abc", True])
+    def test_response_timeout_rejects_and_names_field(self, bad):
+        spec = {"serviceRef": {"name": "web", "port": 80}, "label": "web", "responseTimeout": bad}
+        with pytest.raises(SpecError, match="responseTimeout"):
+            parse_crd_spec(spec)
+
 
 # ---------------------------------------------------------------------------
 # parse_ingress_annotations
@@ -174,6 +189,23 @@ class TestParseIngressAnnotations:
         assert result is not None
         assert result.zone is None
         assert result.apex is False
+
+    def test_response_timeout_defaults_to_none(self):
+        result = parse_ingress_annotations({}, self._make_rules())
+        assert result is not None
+        assert result.response_timeout is None
+
+    def test_response_timeout_string_annotation(self):
+        annotations = {"hle.world/response-timeout": "180"}
+        result = parse_ingress_annotations(annotations, self._make_rules())
+        assert result is not None
+        assert result.response_timeout == 180
+
+    @pytest.mark.parametrize("bad", ["0", "1201", "abc", "True"])
+    def test_response_timeout_rejects_and_names_field(self, bad):
+        annotations = {"hle.world/response-timeout": bad}
+        with pytest.raises(SpecError, match="hle.world/response-timeout"):
+            parse_ingress_annotations(annotations, self._make_rules())
 
     def test_empty_rules_returns_none(self):
         assert parse_ingress_annotations({}, []) is None
@@ -265,6 +297,26 @@ class TestManagedTunnel:
             call_kwargs = MockConfig.call_args[1]
             assert call_kwargs["zone"] == "zone.example"
             assert call_kwargs["apex"] is False
+
+            await tunnel.stop()
+
+    @pytest.mark.asyncio
+    async def test_response_timeout_passed_to_tunnel_config(self):
+        spec = self._make_spec(response_timeout=180)
+        tunnel = ManagedTunnel(spec=spec, api_key="hle_test", logger=MagicMock())
+
+        with (
+            patch("hle_operator.tunnel_manager.Tunnel") as MockTunnel,
+            patch("hle_operator.tunnel_manager.TunnelConfig") as MockConfig,
+        ):
+            mock_instance = MockTunnel.return_value
+            mock_instance.connect = AsyncMock()
+            mock_instance.disconnect = AsyncMock()
+
+            await tunnel.start()
+
+            call_kwargs = MockConfig.call_args[1]
+            assert call_kwargs["response_timeout"] == 180
 
             await tunnel.stop()
 
