@@ -166,7 +166,7 @@ agent:
     # hle-client does not read it. Use excludeNamespaces or scope.namespaces.
     excludeLabel: "hle.world/expose=denied"
 
-  # Firepuncher (`hle forward <agent>`) turns the agent into a dialer for other
+  # Firepuncher (`hle firepuncher <agent>`) turns the agent into a dialer for other
   # machines' services on demand. Off for cluster agents.
   firepuncher:
     enabled: false

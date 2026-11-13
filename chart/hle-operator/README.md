@@ -63,7 +63,7 @@ Sonarr/Radarr interactive search.
 | `agent.discovery.enabled` | `true` | Read-only Services/Endpoints discovery. Off drops the grant and the env. |
 | `agent.discovery.excludeNamespaces` | `[kube-system, kube-public, kube-node-lease]` | Namespaces the agent never reports. |
 | `agent.discovery.excludeLabel` | `hle.world/expose=denied` | Passed to the agent as `HLE_DISCOVERY_EXCLUDE_LABEL`. **Not enforced yet**: hle-client does not read it. Use `excludeNamespaces` or `scope.namespaces`. |
-| `agent.firepuncher.enabled` | `false` | Allow `hle forward <agent>` through this agent. Off for cluster agents. |
+| `agent.firepuncher.enabled` | `false` | Allow `hle firepuncher <agent>` through this agent. Off for cluster agents. |
 | `agent.env` | `[]` | Extra environment for the agent container. |
 
 ## RBAC
