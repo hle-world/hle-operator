@@ -1,0 +1,8 @@
+{{/*
+Literal names and globs are different scopes (RBAC differs), so combining them
+is a configuration error rather than a precedence puzzle. This mirrors the
+runtime check in hle_operator.config.load_operator_config.
+*/}}
+{{- if and .Values.scope.namespaces (or .Values.scope.excludeNamespaces .Values.scope.namespacePatterns) -}}
+{{- fail "scope.namespaces cannot be combined with scope.excludeNamespaces or scope.namespacePatterns; use literal names or globs, not both" -}}
+{{- end -}}

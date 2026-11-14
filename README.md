@@ -67,6 +67,23 @@ Turn discovery off with `--set agent.discovery.enabled=false` and the agent stop
 mounting a ServiceAccount token altogether — you then type service URLs into
 the dashboard yourself.
 
+### Scoping which namespaces are reconciled
+
+Two releases can share one cluster without fighting over the same HLETunnels.
+Besides `scope.namespaces` (literal names, RBAC granted per namespace), the
+chart takes namespace globs:
+
+- `scope.excludeNamespaces` (env `HLE_EXCLUDE_NAMESPACES`) — globs never
+  reconciled, e.g. `["e2e-*"]`.
+- `scope.namespacePatterns` (env `HLE_NAMESPACE_PATTERNS`) — globs to reconcile
+  exclusively, e.g. `["e2e-*"]`.
+
+Globs watch cluster-wide and are filtered client-side, so RBAC stays the
+cluster-wide default even though only matching namespaces are touched: a
+namespace created per run (`e2e-<scenario>-<run>`) cannot be granted a Role
+ahead of time. `scope.namespaces` and the glob values cannot be combined — pick
+literal names or globs, not both. An exclude always wins over a pattern.
+
 ### Cluster-agent defaults
 
 A few defaults differ from a laptop agent, because a cluster is a shared

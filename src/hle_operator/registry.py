@@ -32,6 +32,7 @@ from hle_common.agent_protocol import (
     EndpointStatus,
 )
 
+from hle_operator.config import OperatorConfig, namespace_in_scope
 from hle_operator.declared import (
     INGRESS_CLASS,
     PUBLIC_URL_ANNOTATION,
@@ -179,10 +180,23 @@ def strip_finalizer_from_kubernetes(
 
 
 class KubernetesLister:
-    """The default lister: the API server, scoped exactly like kopf's watch."""
+    """The default lister: the API server, scoped exactly like kopf's watch.
 
-    def __init__(self, namespaces: list[str] | None = None) -> None:
-        self._namespaces = namespaces or []
+    Literal namespaces are listed one by one. Globs and excludes cannot be
+    pushed down to the API server, so the listing is cluster-wide and the
+    results are filtered through :func:`namespace_in_scope`, the same rule
+    kopf applies on the watch.
+    """
+
+    def __init__(self, cfg: OperatorConfig | None = None) -> None:
+        self._cfg = cfg
+        self._namespaces = list(cfg.namespaces) if cfg is not None else []
+
+    def _in_scope(self, body: Mapping[str, Any]) -> bool:
+        if self._cfg is None:
+            return True
+        namespace = (body.get("metadata") or {}).get("namespace") or ""
+        return namespace_in_scope(self._cfg, str(namespace))
 
     def list_hletunnels(self) -> list[dict[str, Any]]:
         api = kubernetes.client.CustomObjectsApi()
@@ -198,7 +212,7 @@ class KubernetesLister:
             items = api.list_cluster_custom_object(CUSTOM_GROUP, CUSTOM_VERSION, CUSTOM_PLURAL).get(
                 "items", []
             )
-        return [_to_dict(item) for item in items]
+        return [body for body in (_to_dict(item) for item in items) if self._in_scope(body)]
 
     def list_hle_ingresses(self) -> list[dict[str, Any]]:
         api = kubernetes.client.NetworkingV1Api()
@@ -212,6 +226,7 @@ class KubernetesLister:
             body
             for body in (_to_dict(item) for item in listed)
             if (body.get("spec") or {}).get("ingressClassName") == INGRESS_CLASS
+            and self._in_scope(body)
         ]
 
 

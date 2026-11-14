@@ -52,6 +52,9 @@ Sonarr/Radarr interactive search.
 | `gitops.clusterWideSecretGet` | `false` | Cluster-wide Secret `get` for Secrets whose names are unknown ahead of time. Widest grant; prefer `secretResourceNames`. Both modes: **legacy mode no longer holds it by default**. |
 | `gitops.allowCrossNamespace` | `false` | Let `HLETunnel.spec.serviceRef.namespace` name another namespace. Off: such an HLETunnel ends `Failed`. Passed as `HLE_ALLOW_CROSS_NAMESPACE`. |
 | `scope.namespaces` | `[]` | Namespaces the agent may see/expose. Empty is cluster-wide; set uses per-namespace Roles. |
+| `scope.excludeNamespaces` | `[]` | Namespace globs never reconciled, e.g. `["e2e-*"]`. RBAC stays cluster-wide (ClusterRole). Cannot be combined with `scope.namespaces`. |
+| `scope.namespacePatterns` | `[]` | Namespace globs to reconcile exclusively, e.g. `["e2e-*"]`. RBAC stays cluster-wide (ClusterRole) because per-run namespaces cannot be granted ahead of time. Cannot be combined with `scope.namespaces`. |
+| `crds.install` | `true` | Install the `HLETunnel` CRD with this release. Set `false` for a second release sharing the cluster so the two do not fight over CRD ownership. |
 | `handover.enabled` | `true` | Zero-drop `RollingUpdate` (maxSurge=1, maxUnavailable=0): the relay hands tunnels over to the new pod (needs relay and hle-client 2610.1+). `false` uses `Recreate`. |
 | `allowRawUrls` | `false` | Allow raw URLs as targets. Services only by default; the kube API, metadata, node IPs and loopback are always refused. |
 | `relay.host` / `relay.port` | `""` | Override the HLE relay (self-hosted). |
@@ -82,7 +85,9 @@ in every agent-mode run, since the process always talks to the Kubernetes API.
 
 With `scope.namespaces` set, the namespaced grants become per-namespace Roles;
 a small ClusterRole still covers CRD discovery (and the opt-in cluster-wide
-Secret get).
+Secret get). The glob scopes `scope.excludeNamespaces` and
+`scope.namespacePatterns` stay cluster-wide: the client filters the watch, and
+RBAC does not switch to per-namespace Roles.
 
 ## Migration and rollback
 

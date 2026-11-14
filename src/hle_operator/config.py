@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 import os
 from collections.abc import Mapping
@@ -28,6 +29,12 @@ GITOPS_ENV = "HLE_GITOPS"
 RELAY_HOST_ENV = "HLE_RELAY_HOST"
 RELAY_PORT_ENV = "HLE_RELAY_PORT"
 NAMESPACES_ENV = "HLE_NAMESPACES"
+# Glob scope: which namespaces are reconciled. `HLE_NAMESPACE_PATTERNS` is the
+# allow-list, `HLE_EXCLUDE_NAMESPACES` the deny-list (it wins). Literal
+# `HLE_NAMESPACES` and globs are mutually exclusive: RBAC differs, and mixing
+# them would be ambiguous.
+NAMESPACE_PATTERNS_ENV = "HLE_NAMESPACE_PATTERNS"
+EXCLUDE_NAMESPACES_ENV = "HLE_EXCLUDE_NAMESPACES"
 DEFAULT_RELAY_HOST = "hle.world"
 DEFAULT_RELAY_PORT = 443
 
@@ -51,13 +58,25 @@ class OperatorConfig:
     relay_host: str = DEFAULT_RELAY_HOST
     relay_port: int = DEFAULT_RELAY_PORT
     # Empty means cluster-wide. kopf takes either this or clusterwide=True.
+    # Literal namespace names; RBAC is granted per namespace.
     namespaces: list[str] = field(default_factory=list)
+    # Namespace globs to reconcile exclusively. Empty means every namespace
+    # (subject to excludes). RBAC stays cluster-wide: a per-run namespace
+    # cannot be granted ahead of time.
+    namespace_patterns: list[str] = field(default_factory=list)
+    # Namespace globs never reconciled. Wins over the patterns.
+    exclude_namespaces: list[str] = field(default_factory=list)
 
 
 def _env_bool(value: str | None, *, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_list(value: str | None) -> list[str]:
+    """Split a comma-separated env var, dropping empty entries and blanks."""
+    return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
 def resolve_mode(env: Mapping[str, str] | None = None) -> OperatorMode:
@@ -113,7 +132,17 @@ def load_operator_config(env: Mapping[str, str] | None = None) -> OperatorConfig
             LEGACY_API_KEY_ENV,
         )
 
-    namespaces = [n.strip() for n in (env.get(NAMESPACES_ENV) or "").split(",") if n.strip()]
+    namespaces = _env_list(env.get(NAMESPACES_ENV))
+    namespace_patterns = _env_list(env.get(NAMESPACE_PATTERNS_ENV))
+    exclude_namespaces = _env_list(env.get(EXCLUDE_NAMESPACES_ENV))
+    if namespaces and (namespace_patterns or exclude_namespaces):
+        logger.error(
+            "%s cannot be combined with %s or %s: pick literal names or globs, not both",
+            NAMESPACES_ENV,
+            NAMESPACE_PATTERNS_ENV,
+            EXCLUDE_NAMESPACES_ENV,
+        )
+        raise SystemExit(2)
     try:
         relay_port = int(env.get(RELAY_PORT_ENV) or DEFAULT_RELAY_PORT)
     except ValueError:
@@ -127,7 +156,39 @@ def load_operator_config(env: Mapping[str, str] | None = None) -> OperatorConfig
         relay_host=env.get(RELAY_HOST_ENV) or DEFAULT_RELAY_HOST,
         relay_port=relay_port,
         namespaces=namespaces,
+        namespace_patterns=namespace_patterns,
+        exclude_namespaces=exclude_namespaces,
     )
+
+
+def kopf_scope(cfg: OperatorConfig) -> tuple[bool, list[str]]:
+    """``(clusterwide, namespaces)`` for ``kopf.operator``.
+
+    Literal names keep kopf's per-namespace watch. Globs and excludes watch
+    cluster-wide and let kopf filter: a positive list of patterns (or ``*``
+    when only excludes are set), followed by ``!`` negations.
+    """
+    if cfg.namespaces:
+        return False, list(cfg.namespaces)
+    if cfg.namespace_patterns or cfg.exclude_namespaces:
+        patterns = list(cfg.namespace_patterns) or ["*"]
+        return False, patterns + [f"!{pattern}" for pattern in cfg.exclude_namespaces]
+    return True, []
+
+
+def namespace_in_scope(cfg: OperatorConfig, name: str) -> bool:
+    """Whether *name* may be reconciled under the configured namespace scope.
+
+    Excludes always win. Structurally the same rule as kopf's, applied to the
+    list results the agent reads directly from the API server.
+    """
+    if cfg.namespaces and name not in cfg.namespaces:
+        return False
+    if cfg.namespace_patterns and not any(
+        fnmatch.fnmatchcase(name, pattern) for pattern in cfg.namespace_patterns
+    ):
+        return False
+    return not any(fnmatch.fnmatchcase(name, pattern) for pattern in cfg.exclude_namespaces)
 
 
 def load_config() -> None:

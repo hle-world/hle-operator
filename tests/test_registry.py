@@ -580,3 +580,95 @@ async def test_close_cancels_retry(fast_retry):
     await asyncio.sleep(0.1)
     assert task.cancelled()
     assert h.client.sent == []
+
+
+# -- KubernetesLister namespace scope ----------------------------------------
+
+
+def _crd(name: str, namespace: str) -> dict:
+    return {"metadata": {"name": name, "namespace": namespace}, "spec": {}}
+
+
+def _tunnel_names(cfg) -> list[str]:
+    from hle_operator.registry import KubernetesLister
+
+    return [b["metadata"]["name"] for b in KubernetesLister(cfg).list_hletunnels()]
+
+
+def test_lister_keeps_everything_without_a_scope(monkeypatch):
+    import kubernetes.client
+
+    from hle_operator.config import OperatorConfig, OperatorMode
+
+    items = [_crd("a", "default"), _crd("b", "e2e-a")]
+
+    class FakeApi:
+        def list_cluster_custom_object(self, *args, **kwargs):
+            return {"items": items}
+
+    monkeypatch.setattr(kubernetes.client, "CustomObjectsApi", FakeApi)
+    assert _tunnel_names(OperatorConfig(mode=OperatorMode.AGENT)) == ["a", "b"]
+
+
+def test_lister_filters_clusterwide_listings_by_scope(monkeypatch):
+    import kubernetes.client
+
+    from hle_operator.config import OperatorConfig, OperatorMode
+
+    items = [_crd("in-default", "default"), _crd("in-e2e", "e2e-a")]
+
+    class FakeApi:
+        def list_cluster_custom_object(self, *args, **kwargs):
+            return {"items": items}
+
+    monkeypatch.setattr(kubernetes.client, "CustomObjectsApi", FakeApi)
+    excluded = OperatorConfig(mode=OperatorMode.AGENT, exclude_namespaces=["e2e-*"])
+    assert _tunnel_names(excluded) == ["in-default"]
+
+    patterns = OperatorConfig(mode=OperatorMode.AGENT, namespace_patterns=["e2e-*"])
+    assert _tunnel_names(patterns) == ["in-e2e"]
+
+
+def test_lister_uses_namespaced_listing_for_literals(monkeypatch):
+    import kubernetes.client
+
+    from hle_operator.config import OperatorConfig, OperatorMode
+
+    calls: list[str] = []
+
+    class FakeApi:
+        def list_namespaced_custom_object(self, group, version, namespace, plural):
+            calls.append(namespace)
+            return {"items": [_crd(namespace, namespace)]}
+
+    monkeypatch.setattr(kubernetes.client, "CustomObjectsApi", FakeApi)
+    cfg = OperatorConfig(mode=OperatorMode.AGENT, namespaces=["team-a", "team-b"])
+    assert calls == []
+    assert _tunnel_names(cfg) == ["team-a", "team-b"]
+    assert calls == ["team-a", "team-b"]
+
+
+def test_lister_filters_ingresses_by_scope(monkeypatch):
+    import kubernetes.client
+
+    from hle_operator.config import OperatorConfig, OperatorMode
+    from hle_operator.registry import KubernetesLister
+
+    def ingress(name: str, namespace: str) -> dict:
+        return {
+            "metadata": {"name": name, "namespace": namespace},
+            "spec": {"ingressClassName": "hle"},
+        }
+
+    class Listed:
+        def __init__(self, items: list[dict]) -> None:
+            self.items = items
+
+    class FakeNetworking:
+        def list_ingress_for_all_namespaces(self):
+            return Listed([ingress("d", "default"), ingress("e", "e2e-a")])
+
+    monkeypatch.setattr(kubernetes.client, "NetworkingV1Api", FakeNetworking)
+    cfg = OperatorConfig(mode=OperatorMode.AGENT, exclude_namespaces=["e2e-*"])
+    names = [b["metadata"]["name"] for b in KubernetesLister(cfg).list_hle_ingresses()]
+    assert names == ["d"]

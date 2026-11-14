@@ -61,6 +61,20 @@ gitops:
 scope:
   namespaces: []
 
+  # Namespace globs never reconciled, e.g. ["e2e-*"]. The agent still holds
+  # cluster-wide RBAC (a ClusterRole); it just ignores matching namespaces.
+  excludeNamespaces: []
+
+  # Namespace globs to reconcile exclusively, e.g. ["e2e-*"]. RBAC stays
+  # cluster-wide (ClusterRole): per-run namespaces cannot be granted ahead of
+  # time. Cannot be combined with `namespaces`.
+  namespacePatterns: []
+
+# Install the HLETunnel CRD with this release. A second release sharing the
+# cluster sets it false so the two releases do not fight over CRD ownership.
+crds:
+  install: true
+
 # Zero-drop `helm upgrade`: the new pod connects alongside the old one, the relay
 # hands the tunnels over (HLE_HANDOVER_GROUP, relay and hle-client 2610.1+),
 # then the old pod exits. Set false to fall back to Recreate, which drops

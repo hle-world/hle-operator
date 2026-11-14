@@ -1,4 +1,4 @@
-{{- if .Values.operator.enabled -}}
+{{- if and .Values.operator.enabled .Values.crds.install -}}
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
