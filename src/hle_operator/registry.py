@@ -226,7 +226,7 @@ class KubernetesLister:
             body
             for body in (_to_dict(item) for item in listed)
             if (body.get("spec") or {}).get("ingressClassName") == INGRESS_CLASS
-            and self._in_scope(body)
+            if self._in_scope(body)
         ]
 
 
