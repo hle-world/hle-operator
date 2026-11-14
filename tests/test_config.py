@@ -117,11 +117,38 @@ class TestKopfScope:
             namespace_patterns=["e2e-*"],
             exclude_namespaces=["kube-system"],
         )
-        assert kopf_scope(cfg) == (False, ["e2e-*", "!kube-system"])
+        assert kopf_scope(cfg) == (False, ["e2e-*, !kube-system"])
 
     def test_only_excludes_use_a_star_pattern(self):
         cfg = OperatorConfig(mode=OperatorMode.AGENT, exclude_namespaces=["e2e-*"])
-        assert kopf_scope(cfg) == (False, ["*", "!e2e-*"])
+        assert kopf_scope(cfg) == (False, ["*, !e2e-*"])
+
+    @staticmethod
+    def _kopf_watches(cfg: OperatorConfig, name: str) -> bool:
+        # kopf watches a namespace when ANY entry of the list matches it.
+        from kopf._cogs.structs.references import match_namespace
+
+        _, patterns = kopf_scope(cfg)
+        return any(match_namespace(name, pattern) for pattern in patterns)
+
+    @pytest.mark.parametrize(
+        ("patterns", "excludes", "name", "expected"),
+        [
+            ([], ["e2e-*"], "default", True),
+            ([], ["e2e-*"], "e2e-jellyfin-1", False),
+            ([], ["e2e-*", "lab-*"], "lab-x", False),
+            (["e2e-*"], [], "e2e-jellyfin-1", True),
+            (["e2e-*"], [], "default", False),
+            (["e2e-*", "lab-*"], ["e2e-skip-*"], "lab-x", True),
+            (["e2e-*", "lab-*"], ["e2e-skip-*"], "e2e-skip-1", False),
+        ],
+    )
+    def test_kopf_matches_namespace_in_scope(self, patterns, excludes, name, expected):
+        cfg = OperatorConfig(
+            mode=OperatorMode.AGENT, namespace_patterns=patterns, exclude_namespaces=excludes
+        )
+        assert self._kopf_watches(cfg, name) is expected
+        assert namespace_in_scope(cfg, name) is expected
 
     def test_nothing_set_is_clusterwide(self):
         cfg = OperatorConfig(mode=OperatorMode.AGENT)

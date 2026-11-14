@@ -164,15 +164,18 @@ def load_operator_config(env: Mapping[str, str] | None = None) -> OperatorConfig
 def kopf_scope(cfg: OperatorConfig) -> tuple[bool, list[str]]:
     """``(clusterwide, namespaces)`` for ``kopf.operator``.
 
-    Literal names keep kopf's per-namespace watch. Globs and excludes watch
-    cluster-wide and let kopf filter: a positive list of patterns (or ``*``
-    when only excludes are set), followed by ``!`` negations.
+    Literal names keep kopf's per-namespace watch. Globs and excludes let kopf
+    filter. kopf matches a namespace if ANY list entry matches it, and a ``!``
+    negation only applies inside the same comma-separated entry, so every
+    include glob carries all the negations: ``["e2e-*, !x"]`` or, with only
+    excludes, ``["*, !e2e-*"]``. A bare ``["*", "!e2e-*"]`` would still
+    watch ``e2e-*`` through the ``*`` entry.
     """
     if cfg.namespaces:
         return False, list(cfg.namespaces)
     if cfg.namespace_patterns or cfg.exclude_namespaces:
-        patterns = list(cfg.namespace_patterns) or ["*"]
-        return False, patterns + [f"!{pattern}" for pattern in cfg.exclude_namespaces]
+        negations = "".join(f", !{pattern}" for pattern in cfg.exclude_namespaces)
+        return False, [f"{pattern}{negations}" for pattern in cfg.namespace_patterns or ["*"]]
     return True, []
 
 
