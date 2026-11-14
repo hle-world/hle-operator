@@ -2,8 +2,8 @@ apiVersion: v2
 name: hle-operator
 description: Kubernetes operator for managing HLE tunnels via CRDs and Ingress resources
 type: application
-version: "2611.1.0"
-appVersion: "2611.1"
+version: "2611.2.0"
+appVersion: "2611.2"
 keywords:
   - hle
   - tunnel
