@@ -590,6 +590,27 @@ class TestNamespaceGlobs:
         assert env["HLE_NAMESPACE_PATTERNS"] == "team-*"
 
     @requires_helm
+    def test_legacy_lab_release_gets_scope_and_optional_key(self):
+        # A second, legacy-mode release for lab namespaces: no default API key
+        # (each HLETunnel brings apiKeyRef), so the key ref must be optional and
+        # the scope must still reach the pod.
+        docs = _render(
+            "mode=legacy",
+            "crds.install=false",
+            "scope.namespacePatterns={e2e-*}",
+        )
+        container = _container(_deployment(docs, "-operator"), "operator")
+        assert _env(container)["HLE_NAMESPACE_PATTERNS"] == "e2e-*"
+        assert _secret_ref(container, "HLE_API_KEY").get("optional") is True
+        assert _kind_names(docs, "CustomResourceDefinition") == []
+
+    @requires_helm
+    def test_legacy_with_a_key_keeps_it_required(self):
+        docs = _render("mode=legacy", "apiKey.existingSecret=hle-api-key")
+        container = _container(_deployment(docs, "-operator"), "operator")
+        assert "optional" not in _secret_ref(container, "HLE_API_KEY")
+
+    @requires_helm
     def test_globs_are_absent_by_default(self):
         env = _env(
             _container(_deployment(_render("credential.value=hle_x"), "-operator"), "operator")
