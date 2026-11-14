@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
+
 from hle_operator.config import (
+    OperatorConfig,
     OperatorMode,
+    kopf_scope,
     load_operator_config,
+    namespace_in_scope,
     resolve_mode,
 )
 
@@ -74,3 +79,107 @@ class TestLoadOperatorConfig:
     def test_invalid_relay_port_falls_back(self):
         cfg = load_operator_config({"HLE_AGENT_TOKEN": "t", "HLE_RELAY_PORT": "not-a-port"})
         assert cfg.relay_port == 443
+
+
+class TestNamespaceScopeConfig:
+    def test_defaults_are_empty(self):
+        cfg = load_operator_config({"HLE_AGENT_TOKEN": "t"})
+        assert cfg.namespace_patterns == []
+        assert cfg.exclude_namespaces == []
+
+    def test_globs_are_parsed_and_stripped(self):
+        cfg = load_operator_config(
+            {
+                "HLE_AGENT_TOKEN": "t",
+                "HLE_NAMESPACE_PATTERNS": "e2e-*, apps-* ",
+                "HLE_EXCLUDE_NAMESPACES": "kube-system, e2e-skip",
+            }
+        )
+        assert cfg.namespace_patterns == ["e2e-*", "apps-*"]
+        assert cfg.exclude_namespaces == ["kube-system", "e2e-skip"]
+
+    @pytest.mark.parametrize("extra", ["HLE_NAMESPACE_PATTERNS", "HLE_EXCLUDE_NAMESPACES"])
+    def test_literals_and_globs_conflict_exits(self, extra: str):
+        env = {"HLE_AGENT_TOKEN": "t", "HLE_NAMESPACES": "apps", extra: "e2e-*"}
+        with pytest.raises(SystemExit) as excinfo:
+            load_operator_config(env)
+        assert excinfo.value.code != 0
+
+
+class TestKopfScope:
+    def test_literals_keep_per_namespace_watch(self):
+        cfg = OperatorConfig(mode=OperatorMode.AGENT, namespaces=["a", "b"])
+        assert kopf_scope(cfg) == (False, ["a", "b"])
+
+    def test_patterns_and_excludes_watch_clusterwide(self):
+        cfg = OperatorConfig(
+            mode=OperatorMode.AGENT,
+            namespace_patterns=["e2e-*"],
+            exclude_namespaces=["kube-system"],
+        )
+        assert kopf_scope(cfg) == (False, ["e2e-*, !kube-system"])
+
+    def test_only_excludes_use_a_star_pattern(self):
+        cfg = OperatorConfig(mode=OperatorMode.AGENT, exclude_namespaces=["e2e-*"])
+        assert kopf_scope(cfg) == (False, ["*, !e2e-*"])
+
+    @staticmethod
+    def _kopf_watches(cfg: OperatorConfig, name: str) -> bool:
+        # kopf watches a namespace when ANY entry of the list matches it.
+        from kopf._cogs.structs.references import match_namespace
+
+        _, patterns = kopf_scope(cfg)
+        return any(match_namespace(name, pattern) for pattern in patterns)
+
+    @pytest.mark.parametrize(
+        ("patterns", "excludes", "name", "expected"),
+        [
+            ([], ["e2e-*"], "default", True),
+            ([], ["e2e-*"], "e2e-jellyfin-1", False),
+            ([], ["e2e-*", "lab-*"], "lab-x", False),
+            (["e2e-*"], [], "e2e-jellyfin-1", True),
+            (["e2e-*"], [], "default", False),
+            (["e2e-*", "lab-*"], ["e2e-skip-*"], "lab-x", True),
+            (["e2e-*", "lab-*"], ["e2e-skip-*"], "e2e-skip-1", False),
+        ],
+    )
+    def test_kopf_matches_namespace_in_scope(self, patterns, excludes, name, expected):
+        cfg = OperatorConfig(
+            mode=OperatorMode.AGENT, namespace_patterns=patterns, exclude_namespaces=excludes
+        )
+        assert self._kopf_watches(cfg, name) is expected
+        assert namespace_in_scope(cfg, name) is expected
+
+    def test_nothing_set_is_clusterwide(self):
+        cfg = OperatorConfig(mode=OperatorMode.AGENT)
+        assert kopf_scope(cfg) == (True, [])
+
+
+class TestNamespaceInScope:
+    def test_exclude_glob_drops_matching_namespace(self):
+        cfg = OperatorConfig(mode=OperatorMode.AGENT, exclude_namespaces=["e2e-*"])
+        assert namespace_in_scope(cfg, "e2e-x") is False
+        assert namespace_in_scope(cfg, "default") is True
+
+    def test_patterns_only_keep_matches(self):
+        cfg = OperatorConfig(mode=OperatorMode.AGENT, namespace_patterns=["e2e-*"])
+        assert namespace_in_scope(cfg, "e2e-a") is True
+        assert namespace_in_scope(cfg, "default") is False
+
+    def test_exclude_wins_over_pattern(self):
+        cfg = OperatorConfig(
+            mode=OperatorMode.AGENT,
+            namespace_patterns=["e2e-*"],
+            exclude_namespaces=["e2e-skip"],
+        )
+        assert namespace_in_scope(cfg, "e2e-a") is True
+        assert namespace_in_scope(cfg, "e2e-skip") is False
+
+    def test_literals_are_exact(self):
+        cfg = OperatorConfig(mode=OperatorMode.AGENT, namespaces=["apps"])
+        assert namespace_in_scope(cfg, "apps") is True
+        assert namespace_in_scope(cfg, "apps-2") is False
+
+    def test_no_scope_keeps_everything(self):
+        cfg = OperatorConfig(mode=OperatorMode.AGENT)
+        assert namespace_in_scope(cfg, "anything") is True

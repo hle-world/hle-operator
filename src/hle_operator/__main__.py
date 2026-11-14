@@ -22,6 +22,7 @@ from hle_operator.config import (
     OperatorConfig,
     OperatorMode,
     allow_cross_namespace,
+    kopf_scope,
     load_config,
     load_operator_config,
 )
@@ -82,9 +83,10 @@ async def _run_legacy(cfg: OperatorConfig) -> int:
     """
     import hle_operator.handlers  # noqa: F401
 
+    clusterwide, namespaces = kopf_scope(cfg)
     await kopf.operator(
-        clusterwide=not cfg.namespaces,
-        namespaces=cfg.namespaces,
+        clusterwide=clusterwide,
+        namespaces=namespaces,
         liveness_endpoint=LIVENESS_ENDPOINT,
     )
     return 0
@@ -117,7 +119,7 @@ async def _run_agent(cfg: OperatorConfig) -> int:
     # Listed exactly as kopf watches: the same namespaces or the whole cluster.
     registry = DeclarationRegistry(
         client,
-        lister=KubernetesLister(cfg.namespaces),
+        lister=KubernetesLister(cfg),
         allow_cross_namespace=allow_cross_namespace(),
     )
     holder["registry"] = registry
@@ -148,13 +150,14 @@ async def _run_agent(cfg: OperatorConfig) -> int:
     # Only on.event handlers are registered, so kopf adds no finalizer and no
     # progress annotations; the legacy finalizer is stripped on sight. One
     # replica, so no peering.
+    clusterwide, namespaces = kopf_scope(cfg)
     client_task = asyncio.create_task(client.run(), name="agent")
     kopf_task = asyncio.create_task(
         kopf.operator(
             standalone=True,
             registry=kopf_registry,
-            clusterwide=not cfg.namespaces,
-            namespaces=cfg.namespaces,
+            clusterwide=clusterwide,
+            namespaces=namespaces,
             liveness_endpoint=LIVENESS_ENDPOINT,
             settings=kopf.OperatorSettings(),
             stop_flag=stop,

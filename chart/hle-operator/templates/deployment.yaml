@@ -126,6 +126,14 @@ spec:
             - name: HLE_NAMESPACES
               value: {{ join "," .Values.scope.namespaces | quote }}
             {{- end }}
+            {{- if .Values.scope.excludeNamespaces }}
+            - name: HLE_EXCLUDE_NAMESPACES
+              value: {{ join "," .Values.scope.excludeNamespaces | quote }}
+            {{- end }}
+            {{- if .Values.scope.namespacePatterns }}
+            - name: HLE_NAMESPACE_PATTERNS
+              value: {{ join "," .Values.scope.namespacePatterns | quote }}
+            {{- end }}
             {{- if .Values.relay.host }}
             - name: HLE_RELAY_HOST
               value: {{ .Values.relay.host | quote }}

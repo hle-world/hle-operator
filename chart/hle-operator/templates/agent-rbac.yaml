@@ -5,6 +5,10 @@ Cluster-wide by default. With `scope.namespaces` set the namespaced grants
 become per-namespace Roles; the cluster-scoped grants kopf needs (CRD discovery)
 still need a small ClusterRole, and an opt-in cluster-wide Secret get lives
 there too because a Role cannot grant it.
+
+`scope.excludeNamespaces` and `scope.namespacePatterns` are globs, so they stay
+cluster-wide (a ClusterRole): a namespace that does not exist yet cannot be
+granted a Role ahead of time. The client filters the watch instead.
 */}}
 {{- if and (eq (include "hle-operator.mode" .) "agent") (or .Values.agent.discovery.enabled (include "hle-operator.gitops" .)) }}
 {{- if .Values.scope.namespaces }}

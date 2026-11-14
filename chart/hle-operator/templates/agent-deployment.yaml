@@ -63,6 +63,14 @@ spec:
             - name: HLE_DISCOVERY_EXCLUDE_LABEL
               value: {{ .Values.agent.discovery.excludeLabel | quote }}
             {{- end }}
+            {{- if .Values.scope.excludeNamespaces }}
+            - name: HLE_EXCLUDE_NAMESPACES
+              value: {{ join "," .Values.scope.excludeNamespaces | quote }}
+            {{- end }}
+            {{- if .Values.scope.namespacePatterns }}
+            - name: HLE_NAMESPACE_PATTERNS
+              value: {{ join "," .Values.scope.namespacePatterns | quote }}
+            {{- end }}
             {{- with .Values.agent.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

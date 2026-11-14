@@ -577,6 +577,71 @@ class TestScopedRbac:
         assert env["HLE_NAMESPACES"] == "team-a,team-b"
 
 
+class TestNamespaceGlobs:
+    @requires_helm
+    def test_globs_are_passed_to_the_agent(self):
+        docs = _render(
+            "credential.value=hle_x",
+            "scope.excludeNamespaces={e2e-*}",
+            "scope.namespacePatterns={team-*}",
+        )
+        env = _env(_container(_deployment(docs, "-operator"), "operator"))
+        assert env["HLE_EXCLUDE_NAMESPACES"] == "e2e-*"
+        assert env["HLE_NAMESPACE_PATTERNS"] == "team-*"
+
+    @requires_helm
+    def test_globs_are_absent_by_default(self):
+        env = _env(
+            _container(_deployment(_render("credential.value=hle_x"), "-operator"), "operator")
+        )
+        assert "HLE_EXCLUDE_NAMESPACES" not in env
+        assert "HLE_NAMESPACE_PATTERNS" not in env
+
+    @requires_helm
+    def test_literals_and_globs_fail_the_render(self):
+        cmd = [
+            HELM or "helm",
+            "template",
+            "test-release",
+            str(CHART_DIR),
+            "--set",
+            "credential.value=hle_x",
+            "--set",
+            "scope.namespaces={team-a}",
+            "--set",
+            "scope.excludeNamespaces={e2e-*}",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=60)
+        assert result.returncode != 0
+        assert "cannot be combined" in (result.stderr + result.stdout)
+
+    @requires_helm
+    def test_globs_keep_cluster_wide_rbac(self):
+        docs = _render(
+            "credential.value=hle_x",
+            "scope.excludeNamespaces={e2e-*}",
+            "scope.namespacePatterns={team-*}",
+        )
+        assert _kind_names(docs, "Role") == []
+        role = next(d for d in docs if d.get("kind") == "ClusterRole")
+        assert _rule(role, "services")["verbs"] == ["get", "list", "watch"]
+
+
+class TestCrdsInstall:
+    @requires_helm
+    def test_crd_installs_by_default(self):
+        docs = _render("credential.value=hle_x")
+        assert _kind_names(docs, "CustomResourceDefinition") == ["hletunnels.hle.world"]
+
+    @requires_helm
+    def test_crds_install_false_omits_the_crd(self):
+        docs = _render("credential.value=hle_x", "crds.install=false")
+        assert _kind_names(docs, "CustomResourceDefinition") == []
+
+    def test_default_is_true(self):
+        assert _load("values.yaml")["crds"]["install"] is True
+
+
 class TestAgentDefaults:
     def test_firepuncher_is_off_by_default(self):
         agent = _load("values.yaml")["agent"]
