@@ -71,6 +71,11 @@ spec:
                   {{- $cred := include "hle-operator.credentialSpec" (dict "ctx" . "for" "operator") | fromJson }}
                   name: {{ $cred.name }}
                   key: {{ $cred.key }}
+                  {{- if and (not $agent) (not $cred.existing) (not $cred.inline) }}
+                  # Legacy mode without a default key: every HLETunnel brings its
+                  # own spec.apiKeyRef, so the pod starts without one.
+                  optional: true
+                  {{- end }}
             - name: HLE_OPERATOR_MODE
               value: {{ $mode | quote }}
             # Tells the relay this operator runs in Kubernetes.
@@ -84,6 +89,19 @@ spec:
             # this is turned on.
             - name: HLE_ALLOW_CROSS_NAMESPACE
               value: {{ .Values.gitops.allowCrossNamespace | quote }}
+            # Watch scope, both modes (the legacy operator reads these too).
+            {{- if .Values.scope.namespaces }}
+            - name: HLE_NAMESPACES
+              value: {{ join "," .Values.scope.namespaces | quote }}
+            {{- end }}
+            {{- if .Values.scope.excludeNamespaces }}
+            - name: HLE_EXCLUDE_NAMESPACES
+              value: {{ join "," .Values.scope.excludeNamespaces | quote }}
+            {{- end }}
+            {{- if .Values.scope.namespacePatterns }}
+            - name: HLE_NAMESPACE_PATTERNS
+              value: {{ join "," .Values.scope.namespacePatterns | quote }}
+            {{- end }}
             {{- if not $agent }}
             # The root filesystem is read-only; keep anything the client writes
             # under the home directory on the tmp volume.
@@ -121,18 +139,6 @@ spec:
               value: {{ join "," .Values.agent.discovery.excludeNamespaces | quote }}
             - name: HLE_DISCOVERY_EXCLUDE_LABEL
               value: {{ .Values.agent.discovery.excludeLabel | quote }}
-            {{- end }}
-            {{- if .Values.scope.namespaces }}
-            - name: HLE_NAMESPACES
-              value: {{ join "," .Values.scope.namespaces | quote }}
-            {{- end }}
-            {{- if .Values.scope.excludeNamespaces }}
-            - name: HLE_EXCLUDE_NAMESPACES
-              value: {{ join "," .Values.scope.excludeNamespaces | quote }}
-            {{- end }}
-            {{- if .Values.scope.namespacePatterns }}
-            - name: HLE_NAMESPACE_PATTERNS
-              value: {{ join "," .Values.scope.namespacePatterns | quote }}
             {{- end }}
             {{- if .Values.relay.host }}
             - name: HLE_RELAY_HOST
