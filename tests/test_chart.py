@@ -883,3 +883,24 @@ class TestRbacLeastPrivilege:
         role = next(d for d in docs if d.get("kind") == "ClusterRole")
         status = [r for rule in _rules(role) for r in rule["resources"] if r.endswith("/status")]
         assert sorted(status) == ["hletunnels/status", "ingresses/status"]
+
+
+class TestCrdOverrideColumn:
+    @requires_helm
+    def test_override_printer_column_and_conditions_schema(self):
+        crd = next(
+            d
+            for d in _render("credential.value=hle_x")
+            if d.get("kind") == "CustomResourceDefinition"
+        )
+        version = crd["spec"]["versions"][0]
+        column = next(c for c in version["additionalPrinterColumns"] if c["name"] == "Override")
+        assert column["jsonPath"] == '.status.conditions[?(@.type=="DashboardOverride")].status'
+        status = version["schema"]["openAPIV3Schema"]["properties"]["status"]
+        # Without the schema the API server prunes the condition the operator writes.
+        assert "conditions" in status["properties"]
+
+    def test_override_printer_column_in_manifest_source(self):
+        text = (CHART_DIR / "templates" / "crds" / "hletunnel.yaml").read_text()
+        assert "name: Override" in text
+        assert "DashboardOverride" in text

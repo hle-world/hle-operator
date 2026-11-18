@@ -26,8 +26,8 @@ import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Protocol, runtime_checkable
+from datetime import UTC, datetime
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 import kubernetes.client
@@ -83,7 +83,6 @@ class StatusPatcher(Protocol):
     def patch_ingress(self, namespace: str, name: str, status: dict[str, Any]) -> None: ...
 
 
-@runtime_checkable
 class EventRecorder(Protocol):
     """Where a transition Event goes. Injected so tests never touch the API."""
 
@@ -143,7 +142,7 @@ class KubernetesEventRecorder:
         reason: str,
         message: str,
     ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         body: dict[str, Any] = {
             "metadata": {"generateName": f"{name}.", "namespace": namespace},
             "involvedObject": {
@@ -187,13 +186,7 @@ class StatusPublisher:
         self._registry = registry
         self._interval = interval
         self._patcher = patcher or KubernetesStatusPatcher()
-        if recorder is not None:
-            self._recorder: EventRecorder = recorder
-        elif isinstance(self._patcher, EventRecorder):
-            # A test patcher that also records events is the whole sink.
-            self._recorder = self._patcher
-        else:
-            self._recorder = KubernetesEventRecorder()
+        self._recorder: EventRecorder = recorder or KubernetesEventRecorder()
         self._clock = clock
         # source_ref -> (uid, last status written). Bounded by the registry.
         self._last: dict[str, tuple[str, dict[str, Any]]] = {}
@@ -201,6 +194,9 @@ class StatusPublisher:
         # source_ref -> last dashboard-override state we reported. Absent means
         # the relay has never said anything, so no condition and no event.
         self._overrides: dict[str, bool] = {}
+        # source_ref -> when that state began, so lastTransitionTime is stable
+        # across passes (a fresh timestamp every pass would patch every pass).
+        self._override_since: dict[str, str] = {}
         # Set once the pod starts shutting down: a draining replica never writes
         # status, so it cannot overwrite the replica taking the tunnel over.
         self._stopping = False
@@ -232,15 +228,18 @@ class StatusPublisher:
             del self._retry[gone]
         for gone in self._overrides.keys() - live:
             del self._overrides[gone]
+            self._override_since.pop(gone, None)
 
         now = self._clock()
         for target in targets:
             await self._record_override(target)
             computed: dict[str, Any] = self._compute(target, by_label)
             if target.source_ref.startswith(f"{CRD_KIND}:"):
-                conditions = _conditions(self._overrides.get(target.source_ref))
-                if conditions is not None:
-                    computed["conditions"] = conditions
+                state = self._overrides.get(target.source_ref)
+                if state is not None:
+                    computed["conditions"] = [
+                        _override_condition(state, self._override_since[target.source_ref])
+                    ]
             last = self._last.get(target.source_ref)
             if last == (target.uid, computed) and not self._stale(target, computed):
                 self._retry.pop(target.source_ref, None)
@@ -266,18 +265,24 @@ class StatusPublisher:
         ack = self._registry.ack_for_label(target.endpoint.label)
         if ack is None:
             return
-        overridden = bool(getattr(ack, "overridden", False))
+        overridden = bool(ack.overridden)
         previous = self._overrides.get(target.source_ref)
+        if previous is None and target.stored_override:
+            # After a restart, resume from what the cluster already shows so a
+            # True condition is neither re-announced nor left stale.
+            previous = target.stored_override == "True"
+            self._overrides[target.source_ref] = previous
+            self._override_since[target.source_ref] = target.stored_override_since or _now()
         if overridden:
             if previous is True:
                 return
             self._overrides[target.source_ref] = True
+            self._override_since[target.source_ref] = _now()
             self._log_override(target, overridden=True)
-            await self._emit_event(
-                target, "Warning", OVERRIDE_EVENT_REASON, OVERRIDE_MESSAGE
-            )
+            await self._emit_event(target, "Warning", OVERRIDE_EVENT_REASON, OVERRIDE_MESSAGE)
         elif previous is True:
             self._overrides[target.source_ref] = False
+            self._override_since[target.source_ref] = _now()
             self._log_override(target, overridden=False)
             await self._emit_event(
                 target, "Normal", OVERRIDE_ENDED_EVENT_REASON, OVERRIDE_ENDED_MESSAGE
@@ -370,6 +375,20 @@ class StatusPublisher:
             logger.warning("Failed to patch status for %s: %s", source_ref, _reason(exc))
             return False
         return True
+
+
+def _now() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _override_condition(overridden: bool, since: str) -> dict[str, str]:
+    return {
+        "type": OVERRIDE_TYPE,
+        "status": "True" if overridden else "False",
+        "reason": OVERRIDE_STARTED_REASON if overridden else OVERRIDE_ENDED_REASON,
+        "message": OVERRIDE_MESSAGE if overridden else OVERRIDE_ENDED_MESSAGE,
+        "lastTransitionTime": since,
+    }
 
 
 def _reason(exc: BaseException) -> str:
