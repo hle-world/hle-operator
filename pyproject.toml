@@ -18,7 +18,7 @@ dependencies = [
     # legacy mode, so unbounded streaming OOM-killed the whole pod).
     # 2610.19 adds keyword-only zone= to the per-tunnel ApiClient settings
     # calls, so a label held on two zones can be disambiguated instead of 409.
-    "hle-client>=2610.19",
+    "hle-client>=2611.4",
 ]
 
 [project.optional-dependencies]

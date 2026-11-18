@@ -320,6 +320,32 @@ spec:
     key: api-key             # Key within the Secret
 ```
 
+## Dashboard override
+
+If the tunnel's owner takes over an operator-declared tunnel in the HLE dashboard,
+the relay keeps the dashboard's settings and records, but does not apply, edits to
+your `HLETunnel` or Ingress. The operator shows this so your spec is not silently
+ignored:
+
+- `HLETunnel` gets the condition `DashboardOverride=True` (reason `ManagedInDashboard`),
+  and `kubectl get hlt` shows it in the `Override` column.
+- One `Warning` Event `DashboardOverride` is posted per transition, not per
+  acknowledgement. When the override is turned off the condition becomes `False`
+  (reason `ManagedByCluster`) and a `Normal` Event `DashboardOverrideEnded` is posted.
+- For an Ingress there is no condition; the same Events are posted on the Ingress.
+- Each transition is logged at INFO.
+
+```bash
+kubectl get hlt
+# NAME      PHASE       PUBLIC URL                      LABEL     SYNC     OVERRIDE   AGE
+# grafana   Connected   https://grafana-x7k.hle.world   grafana   strict   True       5m
+kubectl describe hlt grafana   # Events: Warning DashboardOverride ...
+```
+
+Needs hle-client 2611.4 or later and a relay that supports it; against an older relay
+nothing changes (no condition, no Events). Existing clusters must re-apply the CRD
+(Helm does not upgrade CRDs) to get the column and the `status.conditions` schema.
+
 ## Architecture
 
 ```

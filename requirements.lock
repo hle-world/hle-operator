@@ -307,9 +307,9 @@ h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
     # via httpcore
-hle-client==2610.19 \
-    --hash=sha256:957e530d30aa26906f80a72c0bc244aa33f48eca74724bcedb60b58ed879021b \
-    --hash=sha256:a8272e660c0f6b03ebe4e9c9daa56f504a92f1c2c576e100f239789b24402764
+hle-client==2611.4 \
+    --hash=sha256:1fa360e47369deaadb3a05be86a45afd8f07298bda27bb11efbb675ba6b91086 \
+    --hash=sha256:ed265498183f392242dbef4e28150eebc6ee9f6431c2db19b947723998fbfb27
     # via hle-operator
 httpcore==1.0.9 \
     --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55 \

@@ -108,6 +108,10 @@ class DeclarationTarget:
     # .status.phase as the watch last saw it, so the status loop can tell when
     # another writer (a terminating replica) overwrote the phase it wrote.
     stored_phase: str = ""
+    # The stored DashboardOverride condition ("True"/"False"/"") and its
+    # lastTransitionTime, so a restarted operator resumes instead of guessing.
+    stored_override: str = ""
+    stored_override_since: str = ""
 
 
 @dataclass
@@ -542,6 +546,7 @@ class DeclarationRegistry:
                 endpoint=endpoint,
                 uid=self._uid(ref),
                 stored_phase=self._stored_phase(ref),
+                **self._stored_override(ref),
             )
             for ref, endpoint in endpoints.items()
         ]
@@ -566,6 +571,20 @@ class DeclarationRegistry:
             return ""
         status = source.body.get("status") or {}
         return str(status.get("phase") or "")
+
+    def _stored_override(self, source_ref: str) -> dict[str, str]:
+        """The stored ``DashboardOverride`` condition of a CRD, if any."""
+        source = self._sources.get(source_ref)
+        if source is None:
+            return {}
+        status = source.body.get("status") or {}
+        for cond in status.get("conditions") or []:
+            if isinstance(cond, dict) and cond.get("type") == "DashboardOverride":
+                return {
+                    "stored_override": str(cond.get("status") or ""),
+                    "stored_override_since": str(cond.get("lastTransitionTime") or ""),
+                }
+        return {}
 
     def _uid(self, source_ref: str) -> str:
         source = self._sources.get(source_ref)

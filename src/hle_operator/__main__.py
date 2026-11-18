@@ -99,10 +99,12 @@ async def _run_agent(cfg: OperatorConfig) -> int:
 
     from hle_client.agent import AgentClient
 
+    from hle_operator.capabilities import advertise_extra_capabilities
     from hle_operator.registry import DeclarationRegistry, KubernetesLister
     from hle_operator.status import StatusPublisher
 
     load_config()
+    advertise_extra_capabilities()
 
     # The client and the registry need each other: the client's callbacks land
     # on the registry, and the registry sends through the client. The holder
