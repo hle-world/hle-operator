@@ -206,15 +206,11 @@ class TestResponseTimeout:
 
 class TestAllowedIps:
     def test_crd_parses_cidrs_and_labels(self):
-        body = crd(
-            accessControl={
-                "allowedIps": [
-                    {"cidr": "203.0.113.0/24", "label": "office"},
-                    {"cidr": "198.51.100.7"},
-                ]
-            }
-        )
-        result = crd_to_declared(body)
+        ips = [
+            {"cidr": "203.0.113.0/24", "label": "office"},
+            {"cidr": "198.51.100.7"},
+        ]
+        result = crd_to_declared(crd(accessControl={"allowedIps": ips}))
         assert result.access is not None
         assert [(ip.cidr, ip.label) for ip in result.access.allowed_ips] == [
             ("203.0.113.0/24", "office"),
@@ -224,9 +220,7 @@ class TestAllowedIps:
 
     def test_annotation_parses(self):
         body = ingress()
-        body["metadata"]["annotations"] = {
-            "hle.world/allowed-ips": "203.0.113.0/24, 198.51.100.7"
-        }
+        body["metadata"]["annotations"] = {"hle.world/allowed-ips": "203.0.113.0/24,198.51.100.7"}
         result = ingress_to_declared(body)
         assert result.access is not None
         assert [ip.cidr for ip in result.access.allowed_ips] == [
@@ -235,10 +229,8 @@ class TestAllowedIps:
         ]
 
     def test_ipv6_bare_and_bracketed(self):
-        body = crd(
-            accessControl={"allowedIps": [{"cidr": "2001:db8::/32"}, {"cidr": "[2001:db8::1]"}]}
-        )
-        result = crd_to_declared(body)
+        ips = [{"cidr": "2001:db8::/32"}, {"cidr": "[2001:db8::1]"}]
+        result = crd_to_declared(crd(accessControl={"allowedIps": ips}))
         assert result.access is not None
         assert [ip.cidr for ip in result.access.allowed_ips] == [
             "2001:db8::/32",
@@ -263,15 +255,11 @@ class TestAllowedIps:
         assert result.access is not None
 
     def test_dedupe_keeps_first(self):
-        body = crd(
-            accessControl={
-                "allowedIps": [
-                    {"cidr": "203.0.113.0/24", "label": "a"},
-                    {"cidr": "203.0.113.0/24", "label": "b"},
-                ]
-            }
-        )
-        result = crd_to_declared(body)
+        ips = [
+            {"cidr": "203.0.113.0/24", "label": "a"},
+            {"cidr": "203.0.113.0/24", "label": "b"},
+        ]
+        result = crd_to_declared(crd(accessControl={"allowedIps": ips}))
         assert result.access is not None
         assert [ip.label for ip in result.access.allowed_ips] == ["a"]
 
@@ -294,21 +282,14 @@ class TestAllowedIps:
             crd_to_declared(body)
 
     def test_too_many_rejected(self):
-        body = crd(
-            accessControl={
-                "allowedIps": [{"cidr": f"203.0.113.{i}"} for i in range(21)]
-            }
-        )
+        ips = [{"cidr": f"203.0.113.{i}"} for i in range(21)]
+        body = crd(accessControl={"allowedIps": ips})
         with pytest.raises(DeclarationError, match="too many allowed IPs"):
             crd_to_declared(body)
 
     def test_twenty_with_origin_rejected(self):
-        body = crd(
-            accessControl={
-                "allowedIps": [{"cidr": f"203.0.113.{i}"} for i in range(20)],
-                "allowOriginIp": True,
-            }
-        )
+        ips = [{"cidr": f"203.0.113.{i}"} for i in range(20)]
+        body = crd(accessControl={"allowedIps": ips, "allowOriginIp": True})
         with pytest.raises(DeclarationError, match="too many allowed IPs"):
             crd_to_declared(body)
 

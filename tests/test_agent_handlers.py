@@ -98,9 +98,8 @@ async def test_crd_invalid_is_error_not_endpoint():
 
 async def test_crd_invalid_allowed_ip_fails_naming_the_field():
     registry, _ = make_registry()
-    await handle_crd_event(
-        registry, "ADDED", crd_body(accessControl={"allowedIps": [{"cidr": "not-an-ip"}]})
-    )
+    body = crd_body(accessControl={"allowedIps": [{"cidr": "not-an-ip"}]})
+    await handle_crd_event(registry, "ADDED", body)
     targets = registry.targets()
     assert len(targets) == 1
     assert targets[0].endpoint is None
@@ -109,9 +108,8 @@ async def test_crd_invalid_allowed_ip_fails_naming_the_field():
 
 async def test_crd_private_allowed_ip_does_not_fail(caplog):
     registry, _ = make_registry()
-    await handle_crd_event(
-        registry, "ADDED", crd_body(accessControl={"allowedIps": [{"cidr": "10.0.0.0/8"}]})
-    )
+    body = crd_body(accessControl={"allowedIps": [{"cidr": "10.0.0.0/8"}]})
+    await handle_crd_event(registry, "ADDED", body)
     assert [e.label for e in registry.declared()] == ["grafana"]
     assert any("private range" in r.message for r in caplog.records)
 
