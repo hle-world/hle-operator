@@ -469,6 +469,31 @@ class TestCrd:
         assert ref["properties"]["key"]["default"] == "pin"
 
     @requires_helm
+    def test_allowed_ips_are_in_the_schema(self):
+        crd = next(
+            d
+            for d in _render("credential.value=hle_x")
+            if d.get("kind") == "CustomResourceDefinition"
+        )
+        spec = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+        ac = spec["properties"]["accessControl"]["properties"]
+        allowed = ac["allowedIps"]
+        assert allowed["type"] == "array"
+        assert allowed["maxItems"] == 20
+        assert allowed["items"]["required"] == ["cidr"]
+        assert allowed["items"]["properties"]["cidr"]["maxLength"] == 64
+        assert allowed["items"]["properties"]["label"]["maxLength"] == 60
+        assert ac["allowOriginIp"]["type"] == "boolean"
+        assert ac["allowOriginIp"]["default"] is False
+
+    def test_allowed_ips_are_in_the_manifest_source(self):
+        # Helm is not installed in CI, so also check the template directly.
+        text = (CHART_DIR / "templates" / "crds" / "hletunnel.yaml").read_text()
+        assert "allowedIps:" in text
+        assert "maxItems: 20" in text
+        assert "allowOriginIp:" in text
+
+    @requires_helm
     def test_response_timeout_is_bounded_and_has_no_default(self):
         crd = next(
             d

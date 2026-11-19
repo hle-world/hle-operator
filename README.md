@@ -211,6 +211,11 @@ spec:
         provider: google
       - email: dev@company.com
         provider: github
+    allowedIps:
+      - cidr: 203.0.113.0/24
+        label: office
+      - cidr: 198.51.100.7
+    allowOriginIp: true
     pin: "1234"
 ```
 
@@ -225,6 +230,8 @@ metadata:
     hle.world/label: grafana
     hle.world/auth-mode: sso
     hle.world/allowed-users: "me@gmail.com:google,dev@company.com:github"
+    hle.world/allowed-ips: "203.0.113.0/24,198.51.100.7"
+    hle.world/allow-origin-ip: "true"
     hle.world/pin: "1234"
 spec:
   ingressClassName: hle
@@ -264,9 +271,38 @@ kubectl get hlt
 | Field | Type | Description |
 |---|---|---|
 | `allowedUsers` | array | List of `{email, provider}` objects. Provider: `google`, `github`, `hle`, `any` |
+| `allowedIps` | array | Up to 20 `{cidr, label}` objects. Visitor addresses or ranges that skip sign-in, PIN and password. Only useful when a sign-in rule or PIN gates the tunnel. Private, loopback and link-local ranges can never match a visitor and are inert |
+| `allowOriginIp` | boolean | Also allow the public address this tunnel connects to HLE from (the cluster's egress address), evaluated live. Admits everything behind that shared address |
 | `pin` | string | 4-8 digit PIN code. Readable by anyone who can read the object; prefer `pinSecretRef` |
 | `pinSecretRef.name` / `.key` | string | Secret (same namespace) holding the PIN; `key` defaults to `pin`. Exclusive with `pin` |
 | `basicAuth.secretRef.name` | string | Secret with `username` and `password` keys |
+
+#### Visitor IP allowlist
+
+`allowedIps` lists visitor addresses or ranges that skip sign-in, PIN and
+password. On an Ingress, use
+`hle.world/allowed-ips: "203.0.113.0/24,198.51.100.7"`.
+
+`allowOriginIp` (`hle.world/allow-origin-ip: "true"`) also admits the public
+address this tunnel connects to HLE from — the cluster's egress address,
+evaluated live. Everything behind that shared address is admitted, so on a
+shared NAT it is only as narrow as the NAT.
+
+- Entries are IPv4/IPv6 addresses or CIDR ranges. A bare address is one host
+  (`/32` or `/128`); a bracketed IPv6 address (`[2001:db8::1]`) is accepted.
+- `/0` is refused — use `authMode: none` to make the tunnel public.
+- Private, loopback and link-local ranges (RFC 1918, `100.64.0.0/10`,
+  `fc00::/7`, `127.0.0.0/8`, `::1`, `169.254.0.0/16`, `fe80::/10`) can never
+  match a visitor, so they are inert: declared, logged and ignored by the relay.
+- With `authMode: none` the tunnel is public, so the list is not consulted.
+- `syncPolicy: strict` (the default) reconciles the exact set — removing the
+  last entry deletes the rules. `initial` creates them once and leaves the
+  dashboard editable.
+- The origin address is only the family the cluster egresses over; add an
+  explicit CIDR for the other family if you need both.
+
+Needs a server that applies declared IP rules; an older relay silently drops
+the fields.
 
 ### spec.zone / spec.apex
 

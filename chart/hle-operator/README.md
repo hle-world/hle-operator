@@ -41,6 +41,12 @@ raise the relay's wait for the upstream to start answering, in seconds (`1`–`1
 unset keeps the relay default of 30 s) — useful for slow endpoints such as
 Sonarr/Radarr interactive search.
 
+`spec.accessControl.allowedIps` (up to 20 `{cidr, label}` entries, or the
+comma-separated `hle.world/allowed-ips` annotation) lets visitor addresses skip
+sign-in, PIN and password; `allowOriginIp` (`hle.world/allow-origin-ip`) also
+admits the cluster's live egress address. Private, loopback and link-local
+ranges are inert, and `/0` is refused.
+
 ## Values
 
 | Key | Default | Description |

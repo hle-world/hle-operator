@@ -103,6 +103,8 @@ All annotations use the `hle.world/` prefix:
 | `hle.world/sync-policy` | `strict` or `initial` | `strict` |
 | `hle.world/aliases` | Comma-separated extra FQDNs | (none) |
 | `hle.world/allowed-users` | `email:provider,...` format | (none) |
+| `hle.world/allowed-ips` | Comma-separated visitor IPs/CIDRs that skip sign-in | (none) |
+| `hle.world/allow-origin-ip` | `true` to also allow the cluster's live egress address | `false` |
 | `hle.world/pin` | 4-8 digit PIN (readable by anyone who can read the Ingress) | (none) |
 | `hle.world/pin-secret` | `name[#key]` of a Secret in the same namespace holding the PIN (key defaults to `pin`) | (none) |
 | `hle.world/basic-auth-secret` | Secret name with username/password | (none) |
