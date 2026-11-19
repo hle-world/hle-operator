@@ -204,6 +204,132 @@ class TestResponseTimeout:
             ingress_to_declared(body)
 
 
+class TestAllowedIps:
+    def test_crd_parses_cidrs_and_labels(self):
+        body = crd(
+            accessControl={
+                "allowedIps": [
+                    {"cidr": "203.0.113.0/24", "label": "office"},
+                    {"cidr": "198.51.100.7"},
+                ]
+            }
+        )
+        result = crd_to_declared(body)
+        assert result.access is not None
+        assert [(ip.cidr, ip.label) for ip in result.access.allowed_ips] == [
+            ("203.0.113.0/24", "office"),
+            ("198.51.100.7/32", ""),
+        ]
+        assert result.access.allow_origin_ip is False
+
+    def test_annotation_parses(self):
+        body = ingress()
+        body["metadata"]["annotations"] = {
+            "hle.world/allowed-ips": "203.0.113.0/24, 198.51.100.7"
+        }
+        result = ingress_to_declared(body)
+        assert result.access is not None
+        assert [ip.cidr for ip in result.access.allowed_ips] == [
+            "203.0.113.0/24",
+            "198.51.100.7/32",
+        ]
+
+    def test_ipv6_bare_and_bracketed(self):
+        body = crd(
+            accessControl={"allowedIps": [{"cidr": "2001:db8::/32"}, {"cidr": "[2001:db8::1]"}]}
+        )
+        result = crd_to_declared(body)
+        assert result.access is not None
+        assert [ip.cidr for ip in result.access.allowed_ips] == [
+            "2001:db8::/32",
+            "2001:db8::1/128",
+        ]
+
+    def test_allow_origin_ip(self):
+        result = crd_to_declared(crd(accessControl={"allowOriginIp": True}))
+        assert result.access is not None
+        assert result.access.allowed_ips == []
+        assert result.access.allow_origin_ip is True
+
+    def test_annotation_allow_origin_ip(self):
+        body = ingress()
+        body["metadata"]["annotations"] = {"hle.world/allow-origin-ip": "true"}
+        result = ingress_to_declared(body)
+        assert result.access is not None
+        assert result.access.allow_origin_ip is True
+
+    def test_ips_alone_make_access(self):
+        result = crd_to_declared(crd(accessControl={"allowedIps": [{"cidr": "203.0.113.7"}]}))
+        assert result.access is not None
+
+    def test_dedupe_keeps_first(self):
+        body = crd(
+            accessControl={
+                "allowedIps": [
+                    {"cidr": "203.0.113.0/24", "label": "a"},
+                    {"cidr": "203.0.113.0/24", "label": "b"},
+                ]
+            }
+        )
+        result = crd_to_declared(body)
+        assert result.access is not None
+        assert [ip.label for ip in result.access.allowed_ips] == ["a"]
+
+    @pytest.mark.parametrize("bad", ["not-an-ip", "203.0.113.0/33", "2001:db8::/129"])
+    def test_invalid_entry_names_it(self, bad):
+        body = crd(accessControl={"allowedIps": [{"cidr": bad}]})
+        with pytest.raises(DeclarationError, match="allowed IP"):
+            crd_to_declared(body)
+
+    def test_annotation_invalid_names_it(self):
+        body = ingress()
+        body["metadata"]["annotations"] = {"hle.world/allowed-ips": "nope"}
+        with pytest.raises(DeclarationError, match="allowed IP"):
+            ingress_to_declared(body)
+
+    @pytest.mark.parametrize("bad", ["0.0.0.0/0", "::/0"])
+    def test_slash_zero_refused(self, bad):
+        body = crd(accessControl={"allowedIps": [{"cidr": bad}]})
+        with pytest.raises(DeclarationError, match="authMode: none"):
+            crd_to_declared(body)
+
+    def test_too_many_rejected(self):
+        body = crd(
+            accessControl={
+                "allowedIps": [{"cidr": f"203.0.113.{i}"} for i in range(21)]
+            }
+        )
+        with pytest.raises(DeclarationError, match="too many allowed IPs"):
+            crd_to_declared(body)
+
+    def test_twenty_with_origin_rejected(self):
+        body = crd(
+            accessControl={
+                "allowedIps": [{"cidr": f"203.0.113.{i}"} for i in range(20)],
+                "allowOriginIp": True,
+            }
+        )
+        with pytest.raises(DeclarationError, match="too many allowed IPs"):
+            crd_to_declared(body)
+
+    def test_strict_without_ips_leaves_access_none(self):
+        assert crd_to_declared(crd()).access is None
+        assert crd_to_declared(crd(syncPolicy="strict")).access is None
+
+    def test_private_range_still_declared(self, caplog):
+        body = crd(accessControl={"allowedIps": [{"cidr": "10.0.0.0/8"}]})
+        result = crd_to_declared(body)
+        assert result.access is not None
+        assert [ip.cidr for ip in result.access.allowed_ips] == ["10.0.0.0/8"]
+        assert any("private range" in r.message for r in caplog.records)
+
+    def test_auth_mode_none_is_noted(self, caplog):
+        body = crd(authMode="none", accessControl={"allowedIps": [{"cidr": "203.0.113.7"}]})
+        result = crd_to_declared(body)
+        assert result.access is not None
+        assert any("not consulted" in r.message for r in caplog.records)
+
+
 class TestIngressToDeclared:
     def test_zone_annotation(self):
         body = ingress()

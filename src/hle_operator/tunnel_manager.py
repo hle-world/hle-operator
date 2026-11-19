@@ -16,6 +16,8 @@ from hle_client.tunnel import Tunnel, TunnelConfig, TunnelFatalError
 from hle_common.agent_protocol import K8sServiceTarget
 from hle_common.tunnel_spec import MAX_RESPONSE_TIMEOUT
 
+logger = logging.getLogger(__name__)
+
 
 class SpecError(ValueError):
     """A legacy-mode manifest cannot become a tunnel; the message is safe for CR status."""
@@ -561,6 +563,11 @@ def parse_crd_spec(
     service_url = build_service_url(svc_namespace, svc_name, svc_port, svc_protocol)
 
     ac_spec = spec.get("accessControl", {})
+    if ac_spec.get("allowedIps") or ac_spec.get("allowOriginIp"):
+        logger.warning(
+            "HLETunnel sets accessControl.allowedIps/allowOriginIp; "
+            "allowedIps requires agent mode and is ignored"
+        )
     allowed_users = [
         AccessRule(email=u["email"], provider=u.get("provider", "any"))
         for u in ac_spec.get("allowedUsers", [])
@@ -624,6 +631,12 @@ def parse_ingress_annotations(
     forward_host = annotations.get("hle.world/forward-host", "false").lower() == "true"
     verify_ssl = annotations.get("hle.world/verify-ssl", "false").lower() == "true"
     pin = annotations.get("hle.world/pin")
+
+    if annotations.get("hle.world/allowed-ips") or annotations.get("hle.world/allow-origin-ip"):
+        logger.warning(
+            "Ingress sets hle.world/allowed-ips/allow-origin-ip; "
+            "allowedIps requires agent mode and is ignored"
+        )
 
     # Parse allowed users: "email1:provider1,email2:provider2"
     allowed_users: list[AccessRule] = []

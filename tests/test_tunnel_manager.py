@@ -120,6 +120,27 @@ class TestParseCrdSpec:
         with pytest.raises(SpecError, match="responseTimeout"):
             parse_crd_spec(spec)
 
+    def test_allowed_ips_requires_agent_mode(self, caplog):
+        spec = {
+            "serviceRef": {"name": "web", "port": 80},
+            "label": "web",
+            "accessControl": {"allowedIps": [{"cidr": "203.0.113.0/24"}]},
+        }
+        result = parse_crd_spec(spec)
+        # Legacy mode sends nothing for the field: it is not part of the spec.
+        assert result.access_control.allowed_users == []
+        assert result.access_control.pin is None
+        assert any("requires agent mode" in r.message for r in caplog.records)
+
+    def test_allow_origin_ip_requires_agent_mode(self, caplog):
+        spec = {
+            "serviceRef": {"name": "web", "port": 80},
+            "label": "web",
+            "accessControl": {"allowOriginIp": True},
+        }
+        parse_crd_spec(spec)
+        assert any("requires agent mode" in r.message for r in caplog.records)
+
 
 # ---------------------------------------------------------------------------
 # parse_ingress_annotations
@@ -206,6 +227,13 @@ class TestParseIngressAnnotations:
         annotations = {"hle.world/response-timeout": bad}
         with pytest.raises(SpecError, match="hle.world/response-timeout"):
             parse_ingress_annotations(annotations, self._make_rules())
+
+    def test_allowed_ips_requires_agent_mode(self, caplog):
+        annotations = {"hle.world/allowed-ips": "203.0.113.0/24"}
+        result = parse_ingress_annotations(annotations, self._make_rules())
+        assert result is not None
+        assert result.access_control.allowed_users == []
+        assert any("requires agent mode" in r.message for r in caplog.records)
 
     def test_empty_rules_returns_none(self):
         assert parse_ingress_annotations({}, []) is None

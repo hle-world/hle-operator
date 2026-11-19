@@ -7,17 +7,22 @@ stay a table of what a manifest field becomes on the control channel.
 
 from __future__ import annotations
 
+import ipaddress
+import logging
 import re
 from collections.abc import Mapping
 from typing import Any
 
 from hle_common.agent_protocol import (
+    AllowedIp,
     AllowedUser,
     DeclaredAccess,
     DeclaredEndpoint,
     K8sServiceTarget,
 )
 from hle_common.tunnel_spec import MAX_RESPONSE_TIMEOUT
+
+logger = logging.getLogger(__name__)
 
 # A tunnel label becomes the left-most subdomain label: DNS-1123, lower-case.
 _LABEL_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
@@ -26,6 +31,26 @@ _LABEL_MAX = 63
 # Aliases are FQDNs, the same shape the relay accepts for a zone.
 _HOSTNAME_RE = re.compile(r"^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$")
 _HOSTNAME_MAX = 253
+
+# At most this many visitor IP rules, the live origin address included.
+_MAX_ALLOWED_IPS = 20
+
+# Ranges no visitor can ever arrive from: RFC 1918, CGNAT, loopback and
+# link-local. Documentation ranges (203.0.113.0/24, ...) are deliberately not
+# here: they are public space, so a declared one is not inert.
+_V4_PRIVATE: tuple[ipaddress.IPv4Network, ...] = (
+    ipaddress.IPv4Network("10.0.0.0/8"),
+    ipaddress.IPv4Network("172.16.0.0/12"),
+    ipaddress.IPv4Network("192.168.0.0/16"),
+    ipaddress.IPv4Network("100.64.0.0/10"),
+    ipaddress.IPv4Network("127.0.0.0/8"),
+    ipaddress.IPv4Network("169.254.0.0/16"),
+)
+_V6_PRIVATE: tuple[ipaddress.IPv6Network, ...] = (
+    ipaddress.IPv6Network("::1/128"),
+    ipaddress.IPv6Network("fc00::/7"),
+    ipaddress.IPv6Network("fe80::/10"),
+)
 
 CRD_KIND = "hletunnel"
 INGRESS_KIND = "ingress"
@@ -148,16 +173,105 @@ def _crd_allowed_users(ac: Mapping[str, Any]) -> list[AllowedUser]:
     return users
 
 
+def _allowed_ip(entry: str, label: str = "") -> AllowedIp:
+    """One ``{cidr, label}`` visitor rule, validated and canonicalised.
+
+    A bare address becomes its host network (``/32`` or ``/128``); a bracketed
+    IPv6 address is accepted. ``/0`` is refused because it would match every
+    visitor — that is what ``authMode: none`` is for.
+    """
+    candidate = entry.strip()
+    if candidate.startswith("[") and candidate.endswith("]"):
+        candidate = candidate[1:-1]
+    try:
+        network = ipaddress.ip_network(candidate, strict=False)
+    except ValueError as exc:
+        raise DeclarationError(f"invalid allowed IP {entry!r}") from exc
+    if network.prefixlen == 0:
+        raise DeclarationError(
+            f"invalid allowed IP {entry!r}: /0 would match every visitor; "
+            "use authMode: none to make the tunnel public"
+        )
+    return AllowedIp(cidr=str(network), label=label)
+
+
+def _parse_annotation_ips(raw: str) -> list[AllowedIp]:
+    """``cidr,cidr`` annotation -> allowed IP rules, deduplicated in order."""
+    ips: list[AllowedIp] = []
+    seen: set[str] = set()
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        allowed_ip = _allowed_ip(entry)
+        if allowed_ip.cidr in seen:
+            continue
+        seen.add(allowed_ip.cidr)
+        ips.append(allowed_ip)
+    return ips
+
+
+def _crd_allowed_ips(ac: Mapping[str, Any]) -> list[AllowedIp]:
+    """``accessControl.allowedIps`` -> allowed IP rules, deduplicated in order."""
+    ips: list[AllowedIp] = []
+    seen: set[str] = set()
+    for item in ac.get("allowedIps") or []:
+        if not isinstance(item, Mapping) or not item.get("cidr"):
+            continue
+        allowed_ip = _allowed_ip(str(item["cidr"]), str(item.get("label") or ""))
+        if allowed_ip.cidr in seen:
+            continue
+        seen.add(allowed_ip.cidr)
+        ips.append(allowed_ip)
+    return ips
+
+
+def _is_private_cidr(cidr: str) -> bool:
+    """True when no visitor can ever arrive from *cidr* (entirely private space)."""
+    network = ipaddress.ip_network(cidr, strict=False)
+    if isinstance(network, ipaddress.IPv4Network):
+        return any(network.subnet_of(private) for private in _V4_PRIVATE)
+    return any(network.subnet_of(private) for private in _V6_PRIVATE)
+
+
 def _build_access(
     allowed_users: list[AllowedUser],
     pin: str | None,
     basic_auth: str | None,
+    allowed_ips: list[AllowedIp] | None = None,
+    allow_origin_ip: bool = False,
+    *,
+    auth_mode: str = "sso",
 ) -> DeclaredAccess | None:
     """An access policy with something in it, or None (leave/clear, see strict)."""
-    if not allowed_users and not pin and not basic_auth:
+    ips = list(allowed_ips or [])
+    if len(ips) + (1 if allow_origin_ip else 0) > _MAX_ALLOWED_IPS:
+        raise DeclarationError(
+            f"too many allowed IPs: at most {_MAX_ALLOWED_IPS} entries, "
+            "including the live origin address"
+        )
+    for allowed_ip in ips:
+        if _is_private_cidr(allowed_ip.cidr):
+            logger.warning(
+                "allowed IP %s is a private range; ignored by relay: "
+                "private range cannot match a visitor",
+                allowed_ip.cidr,
+            )
+    if auth_mode == "none" and (ips or allow_origin_ip):
+        logger.warning(
+            "authMode: none makes the tunnel public; the allowedIps list is "
+            "not consulted while the tunnel is public"
+        )
+    if not allowed_users and not pin and not basic_auth and not ips and not allow_origin_ip:
         return None
     try:
-        return DeclaredAccess(allowed_users=allowed_users, pin=pin, basic_auth=basic_auth)
+        return DeclaredAccess(
+            allowed_users=allowed_users,
+            pin=pin,
+            basic_auth=basic_auth,
+            allowed_ips=ips,
+            allow_origin_ip=allow_origin_ip,
+        )
     except ValueError as exc:
         raise DeclarationError(f"invalid access control: {exc}") from exc
 
@@ -317,11 +431,12 @@ def crd_to_declared(
         upstream_secret = normalise_secret_ref(str(upstream_secret), namespace)
 
     label = normalise_label(spec.get("label") or (spec.get("serviceRef") or {}).get("name", ""))
+    auth_mode = spec.get("authMode", "sso")
     try:
         return DeclaredEndpoint(
             label=label,
             target=_crd_target(spec, namespace, allow_cross_namespace=allow_cross_namespace),
-            auth_mode=spec.get("authMode", "sso"),
+            auth_mode=auth_mode,
             websocket_enabled=spec.get("websocketEnabled", True),
             forward_host=spec.get("forwardHost", False),
             verify_ssl=spec.get("verifySSL", False),
@@ -333,6 +448,9 @@ def crd_to_declared(
                 _crd_allowed_users(ac),
                 _pin(ac.get("pin"), crd_pin_secret_ref(body), pin_secret),
                 basic_auth,
+                _crd_allowed_ips(ac),
+                bool(ac.get("allowOriginIp", False)),
+                auth_mode=auth_mode,
             ),
             options=_aliases_option(spec.get("aliases")),
             **_zone_fields(spec.get("zone"), spec.get("apex", False)),
@@ -382,16 +500,20 @@ def ingress_to_declared(
     except ValueError as exc:
         raise DeclarationError(f"invalid ingress backend: {exc}") from exc
 
+    auth_mode = annotations.get("hle.world/auth-mode", "sso")
     access = _build_access(
         _parse_annotation_users(annotations.get("hle.world/allowed-users", "")),
         _pin(annotations.get("hle.world/pin"), ingress_pin_secret_ref(body), pin_secret),
         basic_auth,
+        _parse_annotation_ips(annotations.get("hle.world/allowed-ips", "")),
+        annotations.get("hle.world/allow-origin-ip", "false").lower() == "true",
+        auth_mode=auth_mode,
     )
     try:
         return DeclaredEndpoint(
             label=label,
             target=target,
-            auth_mode=annotations.get("hle.world/auth-mode", "sso"),
+            auth_mode=auth_mode,
             websocket_enabled=annotations.get("hle.world/websocket-enabled", "true").lower()
             == "true",
             forward_host=annotations.get("hle.world/forward-host", "false").lower() == "true",

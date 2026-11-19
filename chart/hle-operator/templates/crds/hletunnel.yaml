@@ -199,6 +199,32 @@ spec:
                             name:
                               type: string
                               description: Name of the Secret.
+                    allowedIps:
+                      type: array
+                      maxItems: 20
+                      description: >
+                        Visitor addresses or ranges that skip sign-in, PIN and password. Only
+                        useful when a sign-in rule or PIN gates the tunnel. Private, loopback
+                        and link-local ranges can never match a visitor and are inert.
+                      items:
+                        type: object
+                        required:
+                          - cidr
+                        properties:
+                          cidr:
+                            type: string
+                            maxLength: 64
+                            description: "IPv4/IPv6 address or CIDR"
+                          label:
+                            type: string
+                            maxLength: 60
+                    allowOriginIp:
+                      type: boolean
+                      default: false
+                      description: >
+                        Also allow the public address this tunnel connects to HLE from (the
+                        cluster's egress address), evaluated live. Admits everything behind
+                        that shared address.
                 apiKeyRef:
                   type: object
                   description: >
